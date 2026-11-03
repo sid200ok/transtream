@@ -41,7 +41,7 @@ from django.utils import timezone
 from django.views.decorators.http import require_GET, require_POST
 
 from studio import serializers
-from studio.models import ApiKey, Job, JobState
+from studio.models import ApiKey, Job, JobState, Segment, SegmentSource, Take, TakeKind
 from studio.upload_service import UploadValidationError, handle_upload
 from studio.translation_service import TranslationError, translate_take
 
@@ -342,6 +342,110 @@ def upload_job_transcript(request, job_id):
 
     body, ext = serializers.transcript_body(job, fmt, rows)
     filename = f"transcript_{job.take.id.hex[:8]}.{ext}"
+    return HttpResponse(
+        body,
+        content_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# ─── Media Gallery: takes list + direct transcript (Session: UI overhaul) ──
+# These let the Media Gallery sidebar list the user's recordings/uploads and
+# open an existing transcription by take id without re-processing.
+
+@login_required
+@require_GET
+def take_list(request):
+    """
+    GET /studio/takes/
+
+    Returns the user's takes, newest first, each with:
+      id, kind, source_filename, duration_ms, language, language_probability,
+      created_at, state (via current job), segment_count, raw_url (if file exists).
+    """
+    from django.conf import settings as _s
+
+    takes = Take.objects.filter(user=request.user).order_by("-created_at")
+
+    data = []
+    for take in takes:
+        job = take.current_job
+        seg_count = take.segments.filter(source=SegmentSource.WHISPER).count()
+        raw_url = None
+        if take.raw_relpath:
+            raw_url = f"{_s.MEDIA_URL}{take.raw_relpath}" if hasattr(_s, 'MEDIA_URL') else None
+        data.append({
+            "id": str(take.id),
+            "kind": take.kind,
+            "source_filename": take.source_filename or "Untitled",
+            "duration_ms": take.duration_ms,
+            "language": take.language or None,
+            "language_probability": take.language_probability,
+            "state": job.state if job else JobState.QUEUED,
+            "segment_count": seg_count,
+            "has_transcript": seg_count > 0,
+            "created_at": _iso(take.created_at),
+            "raw_url": raw_url,
+        })
+
+    return JsonResponse({"takes": data})
+
+
+@login_required
+@require_GET
+def take_transcript(request, take_id):
+    """
+    GET /studio/takes/<uuid>/transcript/?format=json|srt|vtt|txt
+
+    Returns the stored Whisper transcript for a take. 409 if not done.
+    """
+    try:
+        tid = uuid.UUID(str(take_id))
+    except (ValueError, AttributeError, TypeError):
+        return JsonResponse({"error": "Invalid take_id."}, status=400)
+
+    from django.shortcuts import get_object_or_404
+    take = get_object_or_404(Take, id=tid, user=request.user)
+
+    if take.state != JobState.DONE:
+        return JsonResponse(
+            {
+                "error": f"Transcript not ready. Take state: {take.state}.",
+                "state": take.state,
+            },
+            status=409,
+        )
+
+    fmt = (request.GET.get("format") or "json").lower()
+    if fmt not in KNOWN_FORMATS:
+        return JsonResponse(
+            {"error": f"Unknown format: {fmt}. Use one of: {', '.join(KNOWN_FORMATS)}."},
+            status=400,
+        )
+
+    rows = serializers.whisper_rows(take)
+
+    if fmt == "json":
+        return JsonResponse({
+            "take_id": str(take.id),
+            "language": take.language,
+            "language_probability": take.language_probability,
+            "duration_ms": take.duration_ms,
+            "segment_count": len(rows),
+            "segments": [
+                {
+                    "index": s.index,
+                    "start_ms": s.start_ms,
+                    "end_ms": s.end_ms,
+                    "duration_ms": s.duration_ms,
+                    "text": s.text,
+                }
+                for s in rows
+            ],
+        })
+
+    body, ext = serializers.transcript_body_for_take(take, fmt, rows)
+    filename = f"transcript_{take.id.hex[:8]}.{ext}"
     return HttpResponse(
         body,
         content_type="text/plain; charset=utf-8",

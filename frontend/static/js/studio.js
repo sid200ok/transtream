@@ -1,4 +1,4 @@
-// ─── TranStream Studio recorder component (Phases 2 + 3 + 4 + 5 + 5.5 + 7) ──
+// ─── TranStream Studio recorder component (Phases 2 + 3 + 4 + 5 + 5.5 + 7 + UI overhaul) ──
 //
 // Mic path (unchanged, proven green since 63fd646):
 //   Browser mic → MediaRecorder 100 ms slices → WebSocket binary frames
@@ -7,25 +7,391 @@
 //   → Silero VAD segments → Faster-Whisper transcript
 //   + live rolling preview ("live_transcript_update") while recording.
 //
-// Upload path (Phase 7, NEW, fully independent):
-//   <input type=file> / drag-drop → XHR POST /studio/upload/ (byte progress)
-//   → 202 {job_id} → poll /studio/jobs/<id>/ (pipeline progress from the
-//   background worker) → /studio/jobs/<id>/transcript/ → render.
+// Upload path (Phase 7, fully independent, now routed through Media Gallery):
+//   Media Gallery → XHR POST /studio/upload/ → 202 {job_id} → poll
+//   /studio/jobs/<id>/ → /studio/jobs/<id>/transcript/ → render in tab.
 //
-// Isolation rule: the upload path reads ONLY the pure formatters
-// (fmtTime / fmtSegTime / fmtBytes / fmtSampleRate / _errMessage /
-// _csrfToken) and writes ONLY into `this.upload.*`. It never touches
-// transcriptSegments, vadSegments, saved, normalized, liveTranscriptText or
-// any WebSocket/mic flag. An upload finishing mid-recording therefore cannot
-// overwrite a mic result — the two timelines are disjoint by construction,
-// mirroring how the VAD and Whisper timelines are kept disjoint in the DB.
+// UI overhaul (current goal):
+//   • Media Gallery left sidebar: collapsible + resizable, two root folders
+//     (Uploaded Audio / Recorded Audio), configurable paths via settings,
+//     rename folders/files, click-to-load existing transcription (no re-run).
+//   • Single mic toggle button (icon + label) replaces Start/Stop.
+//   • Transcription window: fixed to viewport, scrollable, resizable from left.
+//   • Multiple transcription tabs: click a file in Media Gallery → opens a tab.
+//   • Upload panel removed; uploads live in Media Gallery.
+//
+// Isolation rule: the upload path reads ONLY pure formatters and writes ONLY
+// into `this.upload.*` / tab state. It never touches transcriptSegments,
+// vadSegments, saved, normalized, liveTranscriptText or any WS/mic flag.
 //
 // Ordering guarantee (Phase 2, unchanged): every slice is pushed through a
-// serialized promise queue so binary frames reach the server in capture
-// order; the JSON "stop" control is sent only after the queue drains.
-// This is what keeps the concatenated WebM container valid.
+// serialized promise queue so binary frames reach the server in capture order;
+// the JSON "stop" control is sent only after the queue drains.
 
 document.addEventListener('alpine:init', () => {
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // Shared store: Media Gallery state (roots, settings, rename)
+  // ════════════════════════════════════════════════════════════════════════════
+
+  Alpine.store('tsGallery', {
+    roots: [],
+    showSettings: false,
+    renameItem: null,   // {type:'folder'|'file', id, parentId, name, newName}
+
+    init() {
+      const stored = localStorage.getItem('ts_media_roots_v1');
+      if (stored) {
+        try { this.roots = JSON.parse(stored); } catch (e) { this.roots = defaultRoots(); }
+      } else {
+        this.roots = defaultRoots();
+      }
+    },
+
+    save() {
+      localStorage.setItem('ts_media_roots_v1', JSON.stringify(this.roots));
+    },
+
+    // ── folder tree helpers ──
+    findNode(id) {
+      for (const root of this.roots) {
+        const found = this._findInChildren(root.children, id);
+        if (found) return found;
+      }
+      return null;
+    },
+
+    _findInChildren(children, id) {
+      for (const c of children || []) {
+        if (c.id === id) return c;
+        if (c.children) {
+          const deep = this._findInChildren(c.children, id);
+          if (deep) return deep;
+        }
+      }
+      return null;
+    },
+
+    findParent(id) {
+      for (const root of this.roots) {
+        const parent = this._findParentInChildren(root.children, id, root);
+        if (parent) return parent;
+      }
+      return null;
+    },
+
+    _findParentInChildren(children, id, parent) {
+      for (const c of children || []) {
+        if (c.id === id) return parent;
+        if (c.children) {
+          const deep = this._findParentInChildren(c.children, id, c);
+          if (deep) return deep;
+        }
+      }
+      return null;
+    },
+
+    addRoot() {
+      this.roots.push({
+        id: 'root-' + Date.now(),
+        name: 'New Folder',
+        path: '',
+        expanded: true,
+        children: [],
+      });
+      this.save();
+    },
+
+    removeRoot(root) {
+      this.roots = this.roots.filter(r => r.id !== root.id);
+      this.save();
+    },
+
+    createFolder(parent) {
+      if (!parent.children) parent.children = [];
+      parent.children.push({
+        id: 'folder-' + Date.now(),
+        name: 'New Folder',
+        path: '',
+        expanded: true,
+        children: [],
+      });
+      parent.expanded = true;
+      this.save();
+    },
+
+    addFileToNode(parent, file) {
+      if (!parent.children) parent.children = [];
+      parent.children.push({
+        id: 'file-' + Date.now(),
+        name: file.name,
+        type: 'file',
+        takeId: file.takeId || null,
+        size: file.size || 0,
+        mime: file.type || 'audio/mpeg',
+        durationMs: file.durationMs || 0,
+        hasTranscript: !!file.takeId,
+        path: parent.path || '',
+        uploadedAt: new Date().toISOString(),
+      });
+      parent.expanded = true;
+      this.save();
+    },
+
+    startRename(item) {
+      this.renameItem = {
+        type: item.type || 'folder',
+        id: item.id,
+        parentId: item.parentId || null,
+        name: item.name,
+        newName: item.name,
+      };
+    },
+
+    confirmRename() {
+      if (!this.renameItem) return;
+      const { id, type, newName } = this.renameItem;
+      const node = type === 'folder' ? this.findNode(id) : this.findNode(id);
+      if (node) node.name = newName.trim() || node.name;
+      this.renameItem = null;
+      this.save();
+    },
+
+    cancelRename() {
+      this.renameItem = null;
+    },
+
+    deleteNode(id) {
+      // find and remove from parent's children
+      for (const root of this.roots) {
+        if (this._removeFromChildren(root.children, id)) { this.save(); return; }
+      }
+    },
+
+    _removeFromChildren(children, id) {
+      const idx = children.findIndex(c => c.id === id);
+      if (idx >= 0) { children.splice(idx, 1); return true; }
+      for (const c of children || []) {
+        if (c.children && this._removeFromChildren(c.children, id)) return true;
+      }
+      return false;
+    },
+  });
+
+  function defaultRoots() {
+    return [
+      { id: 'root-uploaded', name: 'Uploaded Audio', path: '', expanded: true, children: [] },
+      { id: 'root-recorded', name: 'Recorded Audio', path: '', expanded: true, children: [] },
+    ];
+  }
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // Media Gallery component (left sidebar)
+  // ════════════════════════════════════════════════════════════════════════════
+
+  Alpine.data('mediaGallery', () => ({
+    isCollapsed: false,
+    resizeStartX: 0,
+    resizeStartWidth: 0,
+    uploadTargetId: null,   // root/folder id receiving the next upload
+
+    init() {
+      // nothing to do; store is self-initialising
+    },
+
+    get roots() { return Alpine.store('tsGallery').roots; },
+    get showSettings() { return Alpine.store('tsGallery').showSettings; },
+    set showSettings(v) { Alpine.store('tsGallery').showSettings = v; },
+    get renameItem() { return Alpine.store('tsGallery').renameItem; },
+
+    // ── collapse / resize ──
+    toggleCollapse() {
+      this.isCollapsed = !this.isCollapsed;
+    },
+
+    startResize(e) {
+      this.resizeStartX = e.clientX;
+      this.resizeStartWidth = parseInt(
+        getComputedStyle(document.documentElement).getPropertyValue('--sidebar-width') || '320');
+      document.documentElement.style.setProperty('--sidebar-resizing', '1');
+      window.addEventListener('mousemove', this.onResize);
+      window.addEventListener('mouseup', this.stopResize);
+    },
+
+    onResize(e) {
+      const dx = e.clientX - this.resizeStartX;
+      let w = this.resizeStartWidth + dx;
+      w = Math.max(200, Math.min(600, w));
+      document.documentElement.style.setProperty('--sidebar-width', w + 'px');
+    },
+
+    stopResize() {
+      document.documentElement.style.removeProperty('--sidebar-resizing');
+      window.removeEventListener('mousemove', this.onResize);
+      window.removeEventListener('mouseup', this.stopResize);
+    },
+
+    // ── settings ──
+    openSettings() { this.showSettings = true; },
+    closeSettings() { this.showSettings = false; },
+
+    saveSettings() {
+      this.showSettings = false;
+      Alpine.store('tsGallery').save();
+    },
+
+    addRoot() {
+      Alpine.store('tsGallery').addRoot();
+    },
+
+    removeRoot(root) {
+      Alpine.store('tsGallery').removeRoot(root);
+    },
+
+    createFolder(parent) {
+      Alpine.store('tsGallery').createFolder(parent);
+    },
+
+    // ── upload into a folder ──
+    setUploadTarget(node) {
+      this.uploadTargetId = node.id;
+      const input = document.getElementById('ts-mg-upload-input');
+      if (input) input.click();
+    },
+
+    async onMgFileChosen(e) {
+      const files = e.target.files;
+      if (!files || files.length === 0) return;
+      const node = this._findNodeById(this.uploadTargetId);
+      if (!node) return;
+      for (const f of files) {
+        await this.uploadFileToNode(f, node);
+      }
+      e.target.value = '';
+      this.uploadTargetId = null;
+    },
+
+    async uploadFileToNode(file, node) {
+      const u = this.$parent.upload;  // studioRecorder's upload namespace
+      u.file = file;
+      u.name = file.name || 'upload';
+      u.size = file.size || 0;
+      u.uploading = false; u.progress = 0;
+      u.jobId = null; u.takeId = null;
+      u.state = ''; u.pct = 0; u.error = null; u.code = '';
+      u.segments = []; u.language = ''; u.languageProbability = 0; u.durationMs = 0;
+      u.translationTarget = 'en'; u.translationText = ''; u.translationSource = '';
+      u.translationLoading = false; u.translationError = '';
+
+      // Route through Media Gallery root folder path context
+      u._mgTargetNode = node;
+      await this.$parent.startUpload();
+    },
+
+    // ── file actions ──
+    startRename(item) {
+      Alpine.store('tsGallery').startRename(item);
+    },
+    confirmRename() {
+      Alpine.store('tsGallery').confirmRename();
+    },
+    cancelRename() {
+      Alpine.store('tsGallery').cancelRename();
+    },
+    deleteNode(id) {
+      Alpine.store('tsGallery').deleteNode(id);
+    },
+
+    // ── click on audio file → open transcription tab ──
+    async openFile(fileNode) {
+      const studio = this.$parent;
+      // If it already has a take id, open existing transcription directly.
+      if (fileNode.takeId) {
+        studio.openExistingTab(fileNode.takeId, fileNode.name);
+        return;
+      }
+      // Otherwise, trigger the file picker for this node.
+      this.setUploadTarget(fileNode);
+    },
+
+    _findNodeById(id) {
+      const store = Alpine.store('tsGallery');
+      for (const root of store.roots) {
+        if (root.id === id) return root;
+        const found = store._findInChildren(root.children, id);
+        if (found) return found;
+      }
+      return null;
+    },
+
+    // ── recursive folder tree HTML renderer ──
+    renderFolderTree(node) {
+      const store = Alpine.store('tsGallery');
+      let html = '';
+      for (const c of node.children || []) {
+        const isFolder = c.type === 'folder';
+        const hasChildren = c.children && c.children.length > 0;
+        const childrenHtml = hasChildren && c.expanded
+          ? '<div class="ml-4">' + this.renderFolderTree(c) + '</div>'
+          : '';
+        html += `
+          <div class="flex items-center gap-2 px-2 py-1.5 hover:bg-white/5 rounded-lg cursor-pointer transition">
+            <button
+              @click.stop="c.expanded = !c.expanded"
+              class="flex-shrink-0 w-4 h-4 flex items-center justify-center text-slate-400 hover:text-white"
+              ${!isFolder ? 'style="display:none"' : ''}
+            >
+              <svg class="w-3 h-3 transition-transform" :class="c.expanded ? 'rotate-90' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+              </svg>
+            </button>
+            <span class="flex-1 text-sm text-slate-200 truncate cursor-pointer hover:text-cyan-300 ${isFolder ? 'font-medium' : ''}" @dblclick.stop="startRename(c)" title="${c.name}">${c.name}</span>
+            ${isFolder && hasChildren && !c.expanded
+              ? '<span class="text-[10px] text-slate-500 ml-auto">+' + c.children.length + '</span>'
+              : ''
+            }
+            <div class="flex items-center gap-1">
+              ${isFolder
+                ? '<button @click.stop="createFolder(c)" class="p-1 rounded text-slate-400 hover:text-white" title="New folder"><svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg></button>'
+                : ''
+              }
+              <button @click.stop="setUploadTarget(c)" class="p-1 rounded text-slate-400 hover:text-white" title="Upload audio"><svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg></button>
+              <button @click.stop="startRename(c)" class="p-1 rounded text-slate-400 hover:text-cyan-300" title="Rename"><svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.414l8.586-8.586z"></path></svg></button>
+              <button @click.stop="deleteNode(c.id)" class="p-1 rounded text-rose-400 hover:text-rose-300" title="Delete"><svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg></button>
+            </div>
+          </div>
+          ${childrenHtml}
+        `;
+      }
+      return html;
+    },
+
+    getFileIcon(node) {
+      if (node.type === 'file') {
+        const m = (node.mime || '').toLowerCase();
+        if (m.includes('wav')) return '🎵';
+        if (m.includes('mp3')) return '🎧';
+        if (m.includes('m4a') || m.includes('aac')) return '🎶';
+        if (m.includes('flac')) return '🎼';
+        if (m.includes('ogg') || m.includes('webm')) return '📼';
+        return '📄';
+      }
+      return '📁';
+    },
+
+    getFileSizeText(bytes) {
+      if (!bytes) return '0 B';
+      const units = ['B', 'KB', 'MB', 'GB'];
+      let i = 0, v = Number(bytes);
+      while (v >= 1024 && i < units.length - 1) { v /= 1024; i += 1; }
+      return v.toFixed(v >= 100 || i === 0 ? 0 : 1) + ' ' + units[i];
+    },
+  }));
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // Studio Recorder component (main area)
+  // ════════════════════════════════════════════════════════════════════════════
+
   Alpine.data('studioRecorder', () => ({
     // ── public state ──
     recording: false,
@@ -56,8 +422,8 @@ document.addEventListener('alpine:init', () => {
     liveTranscriptText: '',
     liveSegmentCount: 0,
     liveLanguage: '',
-    liveActive: false,          // true only while a take is in progress
-    activeTab: 'transcribe',    // 'transcribe' | 'translate'
+    liveActive: false,
+    activeTab: 'transcribe',
 
     // ── Phase 9/10: mic translation + TTS ──
     micTranslationTarget: 'en',
@@ -72,7 +438,10 @@ document.addEventListener('alpine:init', () => {
     transcriptView: 'subtitle',   // 'subtitle' | 'timestamp' | 'compact'
     showTimestamps: true,
     activeSpeaker: '',
-    uploadTranslationExpanded: false,
+
+    // ── Multi-tab state ──
+    tabs: [],
+    activeTabId: null,
 
     // ── counters ─
     chunksSent: 0,
@@ -90,49 +459,40 @@ document.addEventListener('alpine:init', () => {
     _timer: null,
     _startTs: 0,
     _mime: '',
+    _micSpeakers: null,
 
     // ── Phase 7: file upload (own namespace; see isolation rule above) ──
     upload: {
-      file: null,
-      name: '',
-      size: 0,
-      dragOver: false,
-      uploading: false,   // POST in flight (amber bar)
-      progress: 0,        // 0..100 bytes sent to the server
-      jobId: null,
-      takeId: null,
-      state: '',          // queued|normalizing|segmenting|transcribing|done|failed|cancelled
-      pct: 0,             // 0..100 server-side pipeline progress (emerald bar)
-      error: null,
-      code: '',
-      segments: [],
-      language: '',
-      languageProbability: 0,
-      durationMs: 0,
-      translationTarget: 'en',
-      translationText: '',
-      translationSource: '',
-      translationLoading: false,
-      translationError: '',
-      polling: false,
-      _timer: null,
-      _deadline: 0,
+      file: null, name: '', size: 0, dragOver: false,
+      uploading: false, progress: 0,
+      jobId: null, takeId: null, state: '', pct: 0,
+      error: null, code: '', segments: [], language: '', languageProbability: 0,
+      durationMs: 0, translationTarget: 'en', translationText: '',
+      translationSource: '', translationLoading: false, translationError: '',
+      polling: false, _timer: null, _deadline: 0,
+      _mgTargetNode: null,   // Media Gallery node receiving this upload
     },
 
     // ── Alpine lifecycle ──
 
     destroy() {
       this.stopUploadPolling();
-      if (this.recording) {
-        try { this.stop(); } catch (e) { /* ignore */ }
-      }
+      if (this.recording) { try { this.stop(); } catch (e) { /* ignore */ } }
       this._closeSocket();
       this._cleanupStream();
       if (this._timer) { clearInterval(this._timer); this._timer = null; }
     },
 
-    // ── controls ──
+    // ══════════════════════════════════════════════════════════════════════════
+    // Controls — single toggle (replaces Start / Stop)
+    // ══════════════════════════════════════════════════════════════════════════
 
+    toggleRecording() {
+      if (this.recording || this.connecting) this.stop();
+      else this.start();
+    },
+
+    // ── mic pipeline ──
     async start() {
       if (this.recording || this.connecting) return;
 
@@ -146,6 +506,7 @@ document.addEventListener('alpine:init', () => {
       this.liveTranscriptText = ''; this.liveSegmentCount = 0; this.liveLanguage = '';
       this.liveActive = true;
       this.activeTab = 'transcribe';
+      this._micSpeakers = null;
 
       this.chunksSent = 0; this.chunksReceived = 0; this.bytesReceived = 0;
       this.serverDurationMs = 0; this.elapsedMs = 0;
@@ -244,15 +605,13 @@ document.addEventListener('alpine:init', () => {
         this._ws.send(JSON.stringify({ type: 'stop', client_ts: Date.now() }));
       }
 
-      // Preview text persists after stop so the user can still read what was
-      // captured. Only the live-active flag is cleared; the last live preview
-      // stays visible until a new recording starts.
       this.liveActive = false;
-
       this._cleanupStream();
     },
 
-    // ── websocket ──
+    // ══════════════════════════════════════════════════════════════════════════
+    // WebSocket
+    // ══════════════════════════════════════════════════════════════════════════
 
     _openSocket() {
       return new Promise((resolve, reject) => {
@@ -328,11 +687,13 @@ document.addEventListener('alpine:init', () => {
         case 'saved':
           this.saved = msg;
           if (msg.take_id) this.takeId = msg.take_id;
+          // Auto-open a tab for the new mic recording.
+          if (msg.take_id && msg.filename) {
+            this.openMicTab(msg.take_id, msg.filename, msg.duration_ms || 0);
+          }
           break;
 
         // ── Phase 5.5: live rolling preview ──
-        // Guarded: a late preview frame must never resurrect the live box
-        // after Stop, and must never overwrite the authoritative transcript.
         case 'live_transcript_update':
           if (!this.recording) break;
           this.liveTranscriptText = msg.text || '';
@@ -343,7 +704,7 @@ document.addEventListener('alpine:init', () => {
         // ── Phase 3 ──
         case 'normalizing':
           this.normalizing = true; this.normalized = null;
-          this.normalizeMessage = msg.message || 'Normalizing audio\u2026';
+          this.normalizeMessage = msg.message || 'Normalizing audio…';
           break;
 
         case 'normalized':
@@ -353,7 +714,7 @@ document.addEventListener('alpine:init', () => {
         // ── Phase 4 ──
         case 'vad_started':
           this.vadRunning = true; this.vadSegments = []; this.vadTotalSpeechMs = 0;
-          this.vadMessage = msg.message || 'Detecting speech segments\u2026';
+          this.vadMessage = msg.message || 'Detecting speech segments…';
           break;
 
         case 'vad_complete':
@@ -367,8 +728,8 @@ document.addEventListener('alpine:init', () => {
         case 'transcribing_started':
           this.transcribing = true; this.transcriptSegments = [];
           this.languageDetected = ''; this.languageProbability = 0;
-          this.transcribeMessage = msg.message || 'Transcribing\u2026';
-          this._micSpeakers = null;  // clear cached speaker labels
+          this.transcribeMessage = msg.message || 'Transcribing…';
+          this._micSpeakers = null;
           break;
 
         case 'transcribing_complete':
@@ -379,8 +740,6 @@ document.addEventListener('alpine:init', () => {
             this.transcriptSegments = msg.segments;
           }
           this.transcribeMessage = '';
-          // Live preview text is intentionally NOT cleared here — it persists
-          // until a new recording starts, so the user always has something readable.
           break;
 
         case 'error':
@@ -425,7 +784,6 @@ document.addEventListener('alpine:init', () => {
     },
 
     _handleTtsAudio(arrayBuffer) {
-      // Received binary PCM audio from server - play it
       if (!this._ttsAudioContext) {
         this._ttsAudioContext = new (window.AudioContext || window.webkitAudioContext)({
           sampleRate: 16000,
@@ -434,11 +792,10 @@ document.addEventListener('alpine:init', () => {
       const ctx = this._ttsAudioContext;
       if (ctx.state === 'suspended') ctx.resume();
 
-      // Convert ArrayBuffer to AudioBuffer and play
       const audioData = new Int16Array(arrayBuffer);
       const float32 = new Float32Array(audioData.length);
       for (let i = 0; i < audioData.length; i++) {
-        float32[i] = audioData[i] / 32768.0; // int16 -> float32 [-1, 1]
+        float32[i] = audioData[i] / 32768.0;
       }
       const buffer = ctx.createBuffer(1, float32.length, 16000);
       buffer.copyToChannel(float32, 0);
@@ -448,114 +805,115 @@ document.addEventListener('alpine:init', () => {
       source.start(0);
     },
 
-    // ── Phase 7: upload controls ────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════════════
+    // Multi-tab system
+    // ══════════════════════════════════════════════════════════════════════════
 
-    pickUploadFile() {
-      const el = document.getElementById('ts-upload-input');
-      if (el) el.click();
+    openMicTab(takeId, filename, durationMs) {
+      const existing = this.tabs.find(t => t.takeId === takeId && t.source === 'mic');
+      if (existing) {
+        this.activeTabId = existing.id;
+        this.transcriptSegments = existing.segments || [];
+        this.languageDetected = existing.language || '';
+        this.languageProbability = existing.languageProbability || 0;
+        this.saved = { ...existing.saved, duration_ms: durationMs };
+        this.takeId = takeId;
+        return;
+      }
+      const tab = {
+        id: 'tab-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
+        title: filename,
+        source: 'mic',
+        takeId: takeId,
+        segments: [...this.transcriptSegments],
+        language: this.languageDetected || '',
+        languageProbability: this.languageProbability,
+        durationMs: durationMs || 0,
+        saved: { ...this.saved, duration_ms: durationMs },
+        translationTarget: this.micTranslationTarget,
+        translationText: this.micTranslationText,
+        translationSource: this.micTranslationSource,
+        translationLoading: false,
+        translationError: '',
+      };
+      this.tabs.push(tab);
+      this.activeTabId = tab.id;
     },
 
-    async openFileSystem() {
-      // Native File System Access API (modern browsers): let the user pick
-      // a local folder or file. Falls back to a hidden file input.
-      try {
-        if (window.showOpenFilePicker) {
-          const handles = await window.showOpenFilePicker({
-            multiple: true,
-            types: [
-              {
-                description: 'Audio files',
-                accept: {
-                  'audio/*': ['.wav', '.mp3', '.m4a', '.flac', '.ogg', '.aac', '.webm', '.wma'],
-                },
-              },
-            ],
-          });
-          for (const handle of handles) {
-            const file = await handle.getFile();
-            this.setUploadFile(file);
-            break; // pick the first one; user can repeat
-          }
-          return;
-        }
-      } catch (e) {
-        // User cancelled or API unavailable -> fall through to input fallback.
+    async openExistingTab(takeId, filename) {
+      // Don't duplicate.
+      const existing = this.tabs.find(t => t.takeId === takeId && t.source === 'upload');
+      if (existing) {
+        this.activeTabId = existing.id;
+        this._applyTabToUI(existing);
+        return;
       }
 
-      const el = document.getElementById('ts-upload-input');
-      if (el) el.click();
+      // Fetch transcript from backend.
+      try {
+        const resp = await fetch('/studio/takes/' + takeId + '/transcript/?format=json', {
+          headers: { 'Accept': 'application/json' },
+        });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const d = await resp.json();
+
+        const tab = {
+          id: 'tab-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
+          title: filename,
+          source: 'upload',
+          takeId: takeId,
+          segments: Array.isArray(d.segments) ? d.segments : [],
+          language: d.language || '',
+          languageProbability: d.language_probability || 0,
+          durationMs: d.duration_ms || 0,
+          saved: null,
+          translationTarget: 'en',
+          translationText: '',
+          translationSource: d.language || '',
+          translationLoading: false,
+          translationError: '',
+        };
+        this.tabs.push(tab);
+        this.activeTabId = tab.id;
+        this._applyTabToUI(tab);
+      } catch (err) {
+        this.error = 'Could not load transcription: ' + this._errMessage(err);
+      }
     },
 
-    onUploadFileChosen(e) {
-      const f = e.target.files && e.target.files[0];
-      if (f) this.setUploadFile(f);
-      // Reset so choosing the same file again still fires a change event.
-      e.target.value = '';
+    closeTab(tabId) {
+      this.tabs = this.tabs.filter(t => t.id !== tabId);
+      if (this.activeTabId === tabId) {
+        this.activeTabId = this.tabs.length > 0 ? this.tabs[0].id : null;
+        if (this.activeTabId) this._applyTabToUI(this.tabs.find(t => t.id === this.activeTabId));
+        else {
+          this.transcriptSegments = [];
+          this.languageDetected = '';
+          this.languageProbability = 0;
+          this.saved = null;
+          this.takeId = '';
+        }
+      }
     },
 
-    onUploadDragOver(e) {
-      e.preventDefault();
-      e.stopPropagation();
-      this.upload.dragOver = true;
+    get activeTab() {
+      return this.tabs.find(t => t.id === this.activeTabId) || null;
     },
 
-    onUploadDragLeave(e) {
-      e.preventDefault();
-      e.stopPropagation();
-      this.upload.dragOver = false;
+    _applyTabToUI(tab) {
+      this.transcriptSegments = tab.segments || [];
+      this.languageDetected = tab.language || '';
+      this.languageProbability = tab.languageProbability || 0;
+      this.takeId = tab.takeId || '';
+      this.saved = tab.saved || null;
+      this.micTranslationTarget = tab.translationTarget || 'en';
+      this.micTranslationText = tab.translationText || '';
+      this.micTranslationSource = tab.translationSource || '';
     },
 
-    onUploadDrop(e) {
-      e.preventDefault();
-      e.stopPropagation();
-      this.upload.dragOver = false;
-      const dt = e.dataTransfer;
-      const f = dt && dt.files && dt.files[0];
-      if (f) this.setUploadFile(f);
-    },
-
-    setUploadFile(f) {
-      this.stopUploadPolling();
-      const u = this.upload;
-      u.file = f;
-      u.name = f.name || 'upload';
-      u.size = f.size || 0;
-      u.uploading = false;
-      u.progress = 0;
-      u.jobId = null;
-      u.takeId = null;
-      u.state = '';
-      u.pct = 0;
-      u.error = null;
-      u.code = '';
-      u.segments = [];
-      u.language = '';
-      u.languageProbability = 0;
-      u.durationMs = 0;
-      u.translationTarget = 'en';
-      u.translationText = '';
-      u.translationSource = '';
-      u.translationLoading = false;
-      u.translationError = '';
-      // Auto-start upload & transcription — no "Transcribe Only" button needed.
-      this.startUpload();
-    },
-
-    clearUpload() {
-      this.stopUploadPolling();
-      const u = this.upload;
-      u.file = null; u.name = ''; u.size = 0; u.dragOver = false;
-      u.uploading = false; u.progress = 0;
-      u.jobId = null; u.takeId = null;
-      u.state = ''; u.pct = 0; u.error = null; u.code = '';
-      u.segments = []; u.language = ''; u.languageProbability = 0; u.durationMs = 0;
-      this._uploadSpeakers = null;
-      u.translationTarget = 'en';
-      u.translationText = '';
-      u.translationSource = '';
-      u.translationLoading = false;
-      u.translationError = '';
-    },
+    // ══════════════════════════════════════════════════════════════════════════
+    // Phase 7: upload controls (Media Gallery routed)
+    // ══════════════════════════════════════════════════════════════════════════
 
     async startUpload() {
       const u = this.upload;
@@ -585,6 +943,19 @@ document.addEventListener('alpine:init', () => {
           u.error = 'Server accepted the file but returned no job id.';
           return;
         }
+
+        // Notify Media Gallery of the new file node.
+        const mg = Alpine.store('tsGallery');
+        const target = u._mgTargetNode || mg.roots[0];
+        if (target && target.children !== undefined) {
+          // Register the uploaded file placeholder in the target folder.
+          mg.addFileToNode(target, {
+            name: u.name, takeId: u.takeId, size: u.size, durationMs: 0,
+            mime: u.file.type || 'audio/mpeg', hasTranscript: false,
+          });
+        }
+        u._mgTargetNode = null;
+
         this.startUploadPolling();
       } catch (err) {
         u.state = '';
@@ -594,10 +965,6 @@ document.addEventListener('alpine:init', () => {
       }
     },
 
-    // XHR rather than fetch: fetch exposes no upload-progress event, and a
-    // 100 MB local upload with no byte counter is indistinguishable from a
-    // hang. Timeout is generous (2 min) but finite, so a dead socket cannot
-    // wedge the panel forever.
     _xhrUpload(url, form, onProgress) {
       return new Promise((resolve, reject) => {
         const xhr = new XMLHttpRequest();
@@ -624,9 +991,6 @@ document.addEventListener('alpine:init', () => {
       if (!u.jobId) return;
       this.stopUploadPolling();
       u.polling = true;
-      // 20-minute ceiling: a long take on a slow CPU can legitimately take
-      // minutes of Whisper, but never 20 hours. On expiry we stop the timer
-      // and say so, rather than spinning silently forever.
       u._deadline = Date.now() + 20 * 60 * 1000;
 
       const tick = async () => {
@@ -648,7 +1012,7 @@ document.addEventListener('alpine:init', () => {
           }
           if (d.state === 'failed') {
             this.stopUploadPolling();
-            u.error = d.last_error || 'Transcription failed. See /admin/studio/job/.';
+            u.error = d.last_error || 'Transcription failed.';
             return;
           }
           if (d.state === 'cancelled') {
@@ -664,8 +1028,6 @@ document.addEventListener('alpine:init', () => {
           }
           u._timer = setTimeout(tick, 1500);
         } catch (err) {
-          // Transient poll failure (server restart, blip): back off and retry
-          // rather than killing the loop. Only give up past the deadline.
           if (Date.now() > u._deadline) {
             this.stopUploadPolling();
             u.error = 'Polling failed: ' + this._errMessage(err);
@@ -696,14 +1058,49 @@ document.addEventListener('alpine:init', () => {
         u.language = d.language ? String(d.language).toUpperCase() : '';
         u.languageProbability = d.language_probability || 0;
         u.durationMs = d.duration_ms || 0;
-        this._uploadSpeakers = null;  // clear cached speaker labels
+
+        // Open an upload tab when transcription completes.
+        const tab = {
+          id: 'tab-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
+          title: u.name,
+          source: 'upload',
+          takeId: u.takeId,
+          segments: u.segments,
+          language: u.language,
+          languageProbability: u.languageProbability,
+          durationMs: u.durationMs,
+          saved: null,
+          translationTarget: u.translationTarget,
+          translationText: u.translationText,
+          translationSource: u.translationSource,
+          translationLoading: false,
+          translationError: '',
+        };
+        this.tabs.push(tab);
+        this.activeTabId = tab.id;
+        this._applyTabToUI(tab);
+
+        // Update Media Gallery node to mark as transcribed.
+        this._updateMgNodeTranscribed(u.takeId);
+
       } catch (err) {
         u.error = 'Transcript fetch failed: ' + this._errMessage(err);
       }
     },
 
-    // ── Translation (Slice A) ─────────────────────────────────────────
+    _updateMgNodeTranscribed(takeId) {
+      const mg = Alpine.store('tsGallery');
+      const mark = (children) => {
+        for (const c of children || []) {
+          if (c.takeId === takeId) { c.hasTranscript = true; mg.save(); return true; }
+          if (c.children && mark(c.children)) return true;
+        }
+        return false;
+      };
+      for (const root of mg.roots) { if (mark(root.children)) return; }
+    },
 
+    // ── Translation ──
     _apiPost(url, body) {
       return fetch(url, {
         method: 'POST',
@@ -766,7 +1163,6 @@ document.addEventListener('alpine:init', () => {
         this.micTranslationTarget = d.target_language || this.micTranslationTarget;
         this.micTranslationText = d.text || '';
 
-        // Trigger TTS synthesis via WebSocket for audio playback
         if (this._ws && this._ws.readyState === WebSocket.OPEN) {
           this._ws.send(JSON.stringify({
             type: 'tts_request',
@@ -790,12 +1186,10 @@ document.addEventListener('alpine:init', () => {
       }
     },
 
-    // ── Advanced transcription display helpers ─────────────────────────
+    // ══════════════════════════════════════════════════════════════════════════
+    // Advanced transcription display helpers
+    // ══════════════════════════════════════════════════════════════════════════
 
-    // Heuristic speaker diarization: when consecutive Whisper segments are
-    // separated by a silence gap longer than 1.5 s, treat them as a different
-    // speaker. Alternates between "Speaker 1" / "Speaker 2" / ... . Falls back
-    // to seg.speaker_id if the backend ever emits one.
     _speakerLabels(segs) {
       const labels = {};
       let current = 1;
@@ -819,13 +1213,7 @@ document.addEventListener('alpine:init', () => {
       return this._micSpeakers[index] || 'Speaker 1';
     },
 
-    getUploadSpeaker(index) {
-      if (!this._uploadSpeakers) this._uploadSpeakers = this._speakerLabels(this.upload.segments);
-      return this._uploadSpeakers[index] || 'Speaker 1';
-    },
-
     speakerColor(speaker) {
-      // Deterministic color per speaker so the same speaker always matches.
       const colors = ['bg-indigo-500/20 text-indigo-300', 'bg-cyan-500/20 text-cyan-300',
                       'bg-emerald-500/20 text-emerald-300', 'bg-rose-500/20 text-rose-300',
                       'bg-amber-500/20 text-amber-300', 'bg-purple-500/20 text-purple-300'];
@@ -837,37 +1225,18 @@ document.addEventListener('alpine:init', () => {
       return colors[Math.abs(hash) % colors.length];
     },
 
-    speakerColorClass(speaker) {
-      return this.speakerColor(speaker);
-    },
-
     speakerList() {
       const set = new Set();
       for (const s of this.transcriptSegments || []) set.add(this.getSpeaker(s.index));
       return Array.from(set).sort();
     },
 
-    uploadSpeakerList() {
-      const set = new Set();
-      for (const s of this.upload.segments || []) set.add(this.getUploadSpeaker(s.index));
-      return Array.from(set).sort();
-    },
-
-    filteredMicSegments() {
+    filteredSegments() {
       if (!this.activeSpeaker) return this.transcriptSegments;
       return this.transcriptSegments.filter(s => this.getSpeaker(s.index) === this.activeSpeaker);
     },
 
-    filteredUploadSegments() {
-      if (!this.activeSpeaker) return this.upload.segments;
-      return this.upload.segments.filter(s => this.getUploadSpeaker(s.index) === this.activeSpeaker);
-    },
-
-    toggleTranslationExpand(source) {
-      if (source === 'mic') this.micTranslationExpanded = !this.micTranslationExpanded;
-      else this.uploadTranslationExpanded = !this.uploadTranslationExpanded;
-    },
-
+    // ── copy / export ──
     copyTranscript() {
       const lines = this.transcriptSegments.map(s => {
         const t = this.fmtSegTime(s.start_ms) + ' → ' + this.fmtSegTime(s.end_ms);
@@ -879,26 +1248,51 @@ document.addEventListener('alpine:init', () => {
       });
     },
 
-    copyUploadTranscript() {
-      const lines = this.upload.segments.map(s => {
-        const t = this.fmtSegTime(s.start_ms) + ' → ' + this.fmtSegTime(s.end_ms);
-        return this.showTimestamps ? '[' + t + '] ' + s.text : s.text;
-      }).join('\n');
-      navigator.clipboard.writeText(lines).then(() => {
+    exportSrt() {
+      const lines = [];
+      for (let i = 0; i < this.transcriptSegments.length; i++) {
+        const s = this.transcriptSegments[i];
+        lines.push(i + 1);
+        lines.push(this.fmtSrt(s.start_ms) + ' --> ' + this.fmtSrt(s.end_ms));
+        lines.push(s.text);
+        lines.push('');
+      }
+      navigator.clipboard.writeText(lines.join('\n')).then(() => {
         const btn = event && event.currentTarget;
-        if (btn) { const old = btn.innerHTML; btn.innerHTML = '✓ Copied'; setTimeout(() => { btn.innerHTML = old; }, 1200); }
+        if (btn) { const old = btn.innerHTML; btn.innerHTML = '✓ SRT copied'; setTimeout(() => { btn.innerHTML = old; }, 1200); }
       });
+    },
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // Status / pipeline
+    // ══════════════════════════════════════════════════════════════════════════
+
+    pipelineBusy() {
+      return this.connecting || this.recording || this.normalizing || this.vadRunning || this.transcribing;
+    },
+
+    pipelineLabel() {
+      if (this.connecting) return 'Connecting…';
+      if (this.recording) {
+        return this.liveTranscriptText ? 'Recording… (live)' : 'Recording…';
+      }
+      if (this.normalizing) return 'Normalizing…';
+      if (this.vadRunning) return 'Detecting speech…';
+      if (this.transcribing) return 'Transcribing…';
+      if (this.transcriptSegments.length > 0) return 'Ready';
+      if (this.saved) return 'Saved';
+      return 'Idle';
     },
 
     uploadStatusLabel() {
       const u = this.upload;
-      if (u.uploading) return 'Uploading\u2026 ' + u.progress + '%';
+      if (u.uploading) return 'Uploading… ' + u.progress + '%';
       if (u.polling) {
         const names = {
           queued: 'Queued (waiting for worker)',
-          normalizing: 'Normalizing (FFmpeg)\u2026',
-          segmenting: 'Detecting speech (Silero VAD)\u2026',
-          transcribing: 'Transcribing (Faster-Whisper)\u2026',
+          normalizing: 'Normalizing (FFmpeg)…',
+          segmenting: 'Detecting speech (Silero VAD)…',
+          transcribing: 'Transcribing (Faster-Whisper)…',
         };
         const base = names[u.state] || (u.state || 'Processing');
         return u.pct ? base + ' ' + u.pct + '%' : base;
@@ -910,12 +1304,14 @@ document.addEventListener('alpine:init', () => {
       return 'No file selected';
     },
 
+    // ══════════════════════════════════════════════════════════════════════════
+    // Helpers
+    // ══════════════════════════════════════════════════════════════════════════
+
     _csrfToken() {
       const m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
       return m ? decodeURIComponent(m[1]) : '';
     },
-
-    // ── helpers ──
 
     _newSessionId() {
       if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
@@ -983,6 +1379,16 @@ document.addEventListener('alpine:init', () => {
       return m + ':' + s + '.' + frac;
     },
 
+    fmtSrt(ms) {
+      ms = Math.max(0, Math.floor(ms || 0));
+      const h = Math.floor(ms / 3600000);
+      const m = Math.floor(ms / 60000) % 60;
+      const s = Math.floor(ms / 1000) % 60;
+      const milli = ms % 1000;
+      return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0') + ':'
+        + String(s).padStart(2, '0') + ',' + String(milli).padStart(3, '0');
+    },
+
     fmtBytes(n) {
       n = Number(n) || 0;
       if (n === 0) return '0 B';
@@ -997,29 +1403,6 @@ document.addEventListener('alpine:init', () => {
       if (hz >= 1000) return (hz / 1000).toFixed(hz % 1000 === 0 ? 0 : 1) + ' kHz';
       return hz + ' Hz';
     },
-
-    // Full pipeline still running?
-    // NOTE: deliberately excludes upload state. Uploading is an HTTP POST and
-    // the worker's queue is independent of the mic, so a user may legitimately
-    // record while an upload transcribes. pipelineBusy() gates the MIC controls
-    // only.
-    pipelineBusy() {
-      return this.connecting || this.recording || this.normalizing || this.vadRunning || this.transcribing;
-    },
-
-    // Status label for the header pill.
-    pipelineLabel() {
-      if (this.connecting) return 'Connecting\u2026';
-      if (this.recording) {
-        // Surface preview liveness right in the status line.
-        return this.liveTranscriptText ? 'Recording\u2026 (live)' : 'Recording\u2026';
-      }
-      if (this.normalizing) return 'Normalizing\u2026';
-      if (this.vadRunning) return 'Detecting speech\u2026';
-      if (this.transcribing) return 'Transcribing\u2026';
-      if (this.transcriptSegments.length > 0) return 'Ready';
-      if (this.saved) return 'Saved';
-      return 'Idle';
-    },
   }));
+
 });

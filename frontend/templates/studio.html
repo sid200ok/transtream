@@ -4,843 +4,634 @@
 {% block title %}Studio | TranStream{% endblock %}
 
 {% block content %}
-<div x-data="studioRecorder" class="grid gap-6 lg:grid-cols-[320px_minmax(0,1fr)]">
+<div x-data="studioRecorder" class="h-screen bg-slate-950" style="--sidebar-width: 320px;">
 
-  <!-- Left Sidebar: Workspace Tree Placeholder -->
-  <aside class="rounded-2xl border border-white/10 bg-slate-900/60 p-4 shadow-xl shadow-black/20">
-    <h2 class="mb-4 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
-      Workspaces
-    </h2>
-
-    <button
-      type="button"
-      @click="openFileSystem()"
-      class="mb-4 w-full cursor-pointer rounded-xl border border-cyan-400/20 bg-cyan-500/5 px-3 py-2 text-left text-sm text-cyan-700 hover:bg-cyan-500/10 transition"
-    >
-      📂 Open File System
-    </button>
-
-    <div class="space-y-2 text-sm text-slate-400">
+  <!-- ─── LEFT SIDEBAR: MEDIA GALLERY ─── -->
+  <aside
+    x-data="mediaGallery()"
+    x-init="init()"
+    :class="[
+      'fixed left-0 top-0 z-40 h-full flex flex-col border-r border-white/10 bg-slate-900/80 backdrop-blur-md transition-all duration-300',
+      isCollapsed ? 'w-16' : 'w-80'
+    ]"
+    style="width: var(--sidebar-width, 320px); min-width: 64px; max-width: 600px;"
+  >
+    <!-- Sidebar Header -->
+    <div class="flex items-center justify-between h-14 px-3 border-b border-white/10">
       <div class="flex items-center gap-2">
-        <span>▼</span>
-        <span>📂 Local Recordings</span>
+        <svg class="w-5 h-5 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path>
+        </svg>
+        <span x-show="!isCollapsed" class="text-sm font-semibold text-slate-100 transition-opacity">Media Gallery</span>
       </div>
-      <div class="ml-6 space-y-1 text-slate-500">
-        <div>📁 media/recordings</div>
-        <div class="text-xs text-slate-600">Raw + normalized + transcribed takes.</div>
+      <button
+        @click="toggleCollapse()"
+        :title="isCollapsed ? 'Expand' : 'Collapse'"
+        class="flex items-center justify-center w-8 h-8 rounded-lg text-slate-400 hover:text-white hover:bg-white/5 transition"
+      >
+        <svg class="w-4 h-4" :class="isCollapsed ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="transition: transform 0.2s;">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 19l-7-7 7-7m8 14l-7-7 7-7"></path>
+        </svg>
+      </button>
+    </div>
+
+    <!-- Resize Handle -->
+    <div
+      x-show="!isCollapsed"
+      @mousedown.prevent="startResize"
+      class="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-cyan-500/20 transition opacity-0 hover:opacity-100"
+      title="Drag to resize"
+    ></div>
+
+    <!-- Gallery Content -->
+    <div class="flex-1 overflow-y-auto" x-show="!isCollapsed" x-cloak>
+      <!-- Settings / Path Config -->
+      <div class="p-3 border-b border-white/10">
+        <button
+          @click="openSettings()"
+          class="flex items-center gap-2 w-full px-3 py-2 rounded-xl text-slate-300 hover:bg-white/5 transition"
+          title="Configure storage paths"
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+          </svg>
+          <span class="text-sm">Settings</span>
+        </button>
       </div>
+
+      <!-- Root Folders -->
+      <template x-for="root in roots" :key="root.id">
+        <div class="border-b border-white/5">
+          <!-- Root Folder Header -->
+          <div class="flex items-center gap-2 px-3 py-2">
+            <button
+              @click="root.expanded = !root.expanded"
+              class="flex-shrink-0 w-6 h-6 flex items-center justify-center text-slate-400 hover:text-white"
+              :title="root.expanded ? 'Collapse' : 'Expand'"
+            >
+              <svg class="w-4 h-4 transition-transform" :class="root.expanded ? 'rotate-90' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+              </svg>
+            </button>
+            <input
+              type="text"
+              x-model="root.name"
+              @keydown.enter.prevent
+              @blur="root.name = root.name.trim() || 'Unnamed'"
+              class="flex-1 text-sm font-medium text-slate-100 bg-transparent border-none outline-none truncate"
+            >
+            <div class="flex items-center gap-1">
+              <button
+                @click="createFolder(root)"
+                class="p-1.5 rounded text-slate-400 hover:text-white hover:bg-white/5 transition"
+                title="New folder"
+              >
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path></svg>
+              </button>
+              <button
+                @click="setUploadTarget(root)"
+                class="p-1.5 rounded text-slate-400 hover:text-white hover:bg-white/5 transition"
+                title="Upload audio"
+              >
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+              </button>
+              <button
+                @click="removeRoot(root)"
+                class="p-1.5 rounded text-rose-400 hover:text-rose-300 hover:bg-rose-500/10 transition"
+                title="Remove root"
+              >
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+              </button>
+            </div>
+          </div>
+
+          <!-- Folder Tree (recursive) -->
+          <template x-if="root.expanded">
+            <div class="ml-6" x-html="renderFolderTree(root)"></div>
+          </template>
+        </div>
+      </template>
+
+      <!-- Empty state -->
+      <template x-if="roots.length === 0">
+        <div class="p-6 text-center text-slate-500">
+          <svg class="w-12 h-12 mx-auto mb-3 text-slate-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path>
+          </svg>
+          <p class="text-sm">No folders configured</p>
+          <p class="text-xs mt-1">Click Settings to add root folders</p>
+        </div>
+      </template>
+    </div>
+
+    <!-- Collapsed state: just icons -->
+    <div x-show="isCollapsed" class="flex-1 flex flex-col items-center py-4 gap-2 overflow-hidden">
+      <button @click="openSettings()" class="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-white/5" title="Settings"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg></button>
+      <template x-for="root in roots" :key="root.id">
+        <button @click="root.expanded = !root.expanded" class="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-white/5" :title="root.name"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path></svg></button>
+      </template>
     </div>
   </aside>
 
-  <!-- Right Panel: Studio Canvas -->
-  <section class="space-y-4">
-
-    <!-- Error Banner -->
-    <div
-      x-show="error"
-      x-cloak
-      class="rounded-2xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200"
-    >
-      <div class="flex items-start justify-between gap-3">
-        <div>
-          <span class="font-semibold">Error:</span>
-          <span x-text="error"></span>
-        </div>
-        <button
-          type="button"
-          @click="error = null"
-          class="rounded-md border border-rose-400/30 px-2 py-1 text-xs text-rose-200 transition hover:bg-rose-500/20"
-        >
-          Dismiss
-        </button>
-      </div>
-    </div>
-
-    <!-- Status Bar -->
-    <div class="rounded-2xl border border-white/10 bg-slate-900/60 p-4 shadow-xl shadow-black/20">
-      <div class="flex flex-wrap items-center justify-between gap-3">
-        <div class="flex flex-wrap items-center gap-3">
-          <span
-            class="inline-flex h-3 w-3 rounded-full"
-            :class="recording ? (liveTranscriptText ? 'bg-emerald-500 animate-pulse' : 'bg-red-500 animate-pulse')
-                   : connecting ? 'bg-amber-400 animate-pulse'
-                   : normalizing ? 'bg-blue-400 animate-pulse'
-                   : vadRunning ? 'bg-purple-400 animate-pulse'
-                   : transcribing ? 'bg-emerald-400 animate-pulse'
-                   : 'bg-slate-600'"
-          ></span>
-
-          <span class="font-mono text-sm text-slate-200" x-text="fmtTime(elapsedMs)">00:00:00.0</span>
-          <span class="text-sm text-slate-400" x-text="pipelineLabel()">Idle</span>
-
-          <template x-if="languageDetected">
-            <span class="text-sm text-slate-500">
-              Language Detected:
-              <span class="font-mono text-cyan-300" x-text="languageDetected"></span>
-              <span class="text-slate-600" x-show="languageProbability > 0"
-                    x-text="'(' + Math.round(languageProbability * 100) + '%)'"></span>
-            </span>
-          </template>
-          <template x-if="!languageDetected">
-            <span class="text-sm text-slate-500">
-              Language Detected:
-              <span x-show="liveLanguage" class="font-mono text-emerald-400/70"
-                    x-text="liveLanguage + ' (live)'"></span>
-              <span x-show="!liveLanguage">—</span>
-            </span>
-          </template>
-        </div>
-
-        <button
-          type="button"
-          @click="nativeScript = !nativeScript"
-          title="Larger, looser rendering for reading this transcript in its own script"
-          class="cursor-pointer rounded-full border border-cyan-400/20 bg-cyan-500/5 px-3 py-1 text-xs font-medium text-cyan-700"
-        >
-          ✨ View Native Script
-        </button>
-      </div>
-
-      <!-- Pipeline progress indicators -->
-      <div x-show="normalizing" x-cloak class="mt-3 rounded-xl border border-blue-500/20 bg-blue-500/5 px-3 py-2">
-        <div class="flex items-center gap-2 text-xs text-blue-300">
-          <svg class="h-4 w-4 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-          </svg>
-          <span x-text="normalizeMessage">Normalizing audio…</span>
-        </div>
-      </div>
-
-      <div x-show="vadRunning" x-cloak class="mt-3 rounded-xl border border-purple-500/20 bg-purple-500/5 px-3 py-2">
-        <div class="flex items-center gap-2 text-xs text-purple-300">
-          <svg class="h-4 w-4 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-          </svg>
-          <span x-text="vadMessage">Detecting speech segments…</span>
-        </div>
-      </div>
-
-      <div x-show="transcribing" x-cloak class="mt-3 rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-3 py-2">
-        <div class="flex items-center gap-2 text-xs text-emerald-300">
-          <svg class="h-4 w-4 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-          </svg>
-          <span x-text="transcribeMessage">Transcribing with Faster-Whisper…</span>
-        </div>
-      </div>
-
-      <!-- Counters -->
-      <div class="mt-4 grid gap-3 text-xs text-slate-400 sm:grid-cols-2 lg:grid-cols-6">
-        <div class="rounded-xl border border-white/5 bg-slate-950/50 px-3 py-2">
-          <div class="mb-1 text-slate-500">Client chunks sent</div>
-          <div class="font-mono text-sm text-slate-200" x-text="chunksSent">0</div>
-        </div>
-        <div class="rounded-xl border border-white/5 bg-slate-950/50 px-3 py-2">
-          <div class="mb-1 text-slate-500">Server chunks received</div>
-          <div class="font-mono text-sm text-slate-200" x-text="chunksReceived">0</div>
-        </div>
-        <div class="rounded-xl border border-white/5 bg-slate-950/50 px-3 py-2">
-          <div class="mb-1 text-slate-500">Server bytes</div>
-          <div class="font-mono text-sm text-slate-200" x-text="fmtBytes(bytesReceived)">0 B</div>
-        </div>
-        <div class="rounded-xl border border-white/5 bg-slate-950/50 px-3 py-2">
-          <div class="mb-1 text-slate-500">Server duration</div>
-          <div class="font-mono text-sm text-slate-200" x-text="fmtTime(serverDurationMs)">00:00:00.0</div>
-        </div>
-        <div class="rounded-xl border border-white/5 bg-slate-950/50 px-3 py-2" x-show="maxBytes > 0">
-          <div class="mb-1 text-slate-500">Max take size</div>
-          <div class="font-mono text-sm text-slate-200" x-text="fmtBytes(maxBytes)">0 B</div>
-        </div>
-        <div class="rounded-xl border border-white/5 bg-slate-950/50 px-3 py-2"
-             x-show="transcriptSegments.length > 0 || liveSegmentCount > 0">
-          <div class="mb-1 text-slate-500">
-            <span x-show="transcriptSegments.length > 0">Transcript segments</span>
-            <span x-show="transcriptSegments.length === 0 && liveSegmentCount > 0">Live segments</span>
+  <!-- ─── MAIN AREA: TRANSCRIPTION WINDOW (FIXED, SCROLLABLE) ─── -->
+  <main
+    class="fixed top-0 right-0 bottom-0 overflow-y-auto bg-slate-950 transition-all duration-300"
+    :style="{ left: isCollapsed ? '64px' : '320px' }"
+  >
+    <!-- Top Bar -->
+    <header class="sticky top-0 z-30 h-16 border-b border-white/10 bg-slate-900/80 backdrop-blur-md">
+      <div class="h-full flex items-center justify-between px-4 gap-4">
+        <!-- Left: Status & Info -->
+        <div class="flex items-center gap-4 min-w-0 flex-1">
+          <!-- Live Indicator -->
+          <div class="flex items-center gap-2">
+            <span
+              class="inline-flex h-2.5 w-2.5 rounded-full transition-all"
+              :class="recording ? (liveTranscriptText ? 'bg-emerald-500 animate-pulse' : 'bg-red-500 animate-pulse')
+                     : connecting ? 'bg-amber-400 animate-pulse'
+                     : normalizing ? 'bg-blue-400 animate-pulse'
+                     : vadRunning ? 'bg-purple-400 animate-pulse'
+                     : transcribing ? 'bg-emerald-400 animate-pulse'
+                     : 'bg-slate-600'"
+            ></span>
+            <span class="font-mono text-sm text-slate-200 tabular-nums" x-text="fmtTime(elapsedMs)">00:00:00.0</span>
+            <span class="text-sm text-slate-400 whitespace-nowrap" x-text="pipelineLabel()">Idle</span>
           </div>
-          <div class="font-mono text-sm"
-               :class="transcriptSegments.length > 0 ? 'text-emerald-300' : 'text-emerald-400/70'"
-               x-text="transcriptSegments.length > 0 ? transcriptSegments.length : liveSegmentCount">0</div>
+
+          <!-- Language Detected -->
+          <template x-if="languageDetected || liveLanguage">
+            <div class="flex items-center gap-1.5 text-sm">
+              <span class="text-slate-500">Lang:</span>
+              <span class="font-mono text-cyan-300" x-text="languageDetected || liveLanguage + ' (live)'"></span>
+              <template x-if="languageProbability > 0">
+                <span class="text-slate-600" x-text="'(' + Math.round(languageProbability * 100) + '%)'"></span>
+              </template>
+            </div>
+          </template>
+
+          <!-- Active Tab Indicator -->
+          <template x-if="activeTabId">
+            <span class="text-xs text-slate-500 px-2 py-0.5 bg-slate-800 rounded">Tab: <span class="text-slate-300" x-text="activeTab.title"></span></span>
+          </template>
+        </div>
+
+        <!-- Right: Actions -->
+        <div class="flex items-center gap-2">
+          <!-- Native Script Toggle -->
+          <button
+            type="button"
+            @click="nativeScript = !nativeScript"
+            title="Larger, looser rendering for reading this transcript in its own script"
+            class="flex items-center gap-1.5 rounded-lg border border-cyan-400/20 bg-cyan-500/5 px-3 py-1.5 text-xs font-medium text-cyan-300 hover:bg-cyan-500/10 transition"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"></path></svg>
+            ✨ Native
+          </button>
+
+          <!-- Single Mic Toggle Button -->
+          <button
+            type="button"
+            @click="toggleRecording()"
+            :disabled="connecting || normalizing || vadRunning || transcribing"
+            :class="[
+              'flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold transition',
+              recording ? 'bg-rose-600 text-white hover:bg-rose-500' : 'bg-emerald-600 text-white hover:bg-emerald-500',
+              (connecting || normalizing || vadRunning || transcribing) ? 'opacity-50 cursor-not-allowed' : ''
+            ]"
+            :title="recording ? 'Stop recording (Space)' : 'Start recording (Space)'"
+          >
+            <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+              <template x-if="recording">
+                <rect x="6" y="4" width="12" height="16" rx="2"></rect>
+              </template>
+              <template x-if="!recording">
+                <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"></path>
+              </template>
+            </svg>
+            <span x-text="recording ? 'Stop' : 'Record'"></span>
+          </button>
         </div>
       </div>
-    </div>
 
-    <!-- Transcription Canvas -->
-    <div class="min-h-[360px] rounded-2xl border border-white/10 bg-slate-950/70 p-4 font-mono text-sm leading-7 text-slate-200 shadow-inner shadow-black/30">
+      <!-- Pipeline Progress Bar (collapsed under header) -->
+      <template x-if="normalizing || vadRunning || transcribing">
+        <div class="px-4 py-2 border-t border-white/5 bg-slate-900/50">
+          <div class="flex items-center gap-3 text-xs">
+            <svg class="h-4 w-4 animate-spin" :class="normalizing ? 'text-blue-400' : (vadRunning ? 'text-purple-400' : 'text-emerald-400')" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+            <span x-text="normalizing ? normalizeMessage : (vadRunning ? vadMessage : transcribeMessage)"></span>
+          </div>
+        </div>
+      </template>
+    </header>
 
-      <!-- Idle -->
-      <template x-if="!recording && !saved && !connecting && !normalizing && !vadRunning && !transcribing && transcriptSegments.length === 0">
-        <div class="space-y-3">
-          <p class="text-slate-300">TranStream Studio is ready.</p>
-          <p class="text-slate-500">
-            Click <span class="text-emerald-300">🎤 Start</span> to capture microphone audio,
-            or <span class="text-cyan-300">📤 Upload</span> an audio file to transcribe it.
-            Pipeline: record → save raw → FFmpeg normalize → Silero VAD → Faster-Whisper transcription.
-            Live preview streams while you speak.
-          </p>
+    <!-- Transcription Canvas - Fixed, Scrollable -->
+    <div
+      class="p-4 space-y-4"
+      style="min-height: calc(100vh - 64px);"
+    >
+      <!-- Error Banner -->
+      <div
+        x-show="error"
+        x-cloak
+        class="rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200"
+      >
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <span class="font-semibold">Error:</span>
+            <span x-text="error"></span>
+          </div>
+          <button
+            type="button"
+            @click="error = null"
+            class="rounded-md border border-rose-400/30 px-2 py-1 text-xs text-rose-200 transition hover:bg-rose-500/20"
+          >
+            Dismiss
+          </button>
+        </div>
+      </div>
+
+      <!-- Tab Bar -->
+      <template x-if="tabs.length > 0">
+        <div class="flex gap-1 border-b border-white/10 pb-2 mb-4 overflow-x-auto">
+          <template x-for="tab in tabs" :key="tab.id">
+            <button
+              type="button"
+              @click="activeTabId = tab.id; _applyTabToUI(tab)"
+              class="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-t-lg transition whitespace-nowrap"
+              :class="[
+                activeTabId === tab.id
+                  ? 'bg-slate-800 text-white border-b-2 border-cyan-400'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
+              ]"
+            >
+              <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
+                <template x-if="tab.source === 'mic'">
+                  <path d="M10 15c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S7 3.34 7 5v7c0 1.66 1.34 3 3 3z"></path>
+                </template>
+                <template x-if="tab.source === 'upload'">
+                  <path fill-rule="evenodd" d="M10 2a4 4 0 00-4 4v1h4V6a2 2 0 012-2h4a2 2 0 012 2v10a2 2 0 01-2 2H6a2 2 0 01-2-2V6a4 4 0 004-4zm2 5a2 2 0 012-2h4a2 2 0 012 2v10a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h4zm-2 7a1 1 0 100-2 1 1 0 000 2z" clip-rule="evenodd"></path>
+                </template>
+              </svg>
+              <span class="truncate max-w-[140px]" x-text="tab.title"></span>
+              <button
+                type="button"
+                @click.stop="closeTab(tab.id)"
+                class="ml-1 p-0.5 rounded hover:bg-white/10 text-[10px] opacity-0 hover:opacity-100 transition"
+              >✕</button>
+            </button>
+          </template>
         </div>
       </template>
 
-      <!-- Connecting -->
-      <template x-if="connecting">
-        <p class="text-amber-300">Requesting microphone permission and opening WebSocket…</p>
+      <!-- Tab Content -->
+      <template x-if="tabs.length > 0 && activeTabId">
+        <div x-show="activeTabId" class="space-y-4">
+          <template x-if="activeTab">
+            <!-- Transcription View for Active Tab -->
+            <div class="rounded-xl border border-white/10 bg-slate-900/60 p-4 shadow-xl shadow-black/20 overflow-hidden">
+              <div class="mb-4 flex flex-wrap items-center gap-2">
+                <h3 class="font-semibold text-slate-100 truncate flex-1" x-text="activeTab.title"></h3>
+                <span class="text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-400" x-text="activeTab.source === 'mic' ? 'Microphone' : 'Upload'"></span>
+                <span class="text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-400" x-text="fmtTime(activeTab.durationMs)"></span>
+                <template x-if="activeTab.language">
+                  <span class="text-xs px-2 py-0.5 rounded bg-slate-800 text-cyan-300" x-text="activeTab.language"></span>
+                  <template x-if="activeTab.languageProbability > 0">
+                    <span class="text-xs text-slate-500" x-text="'(' + Math.round(activeTab.languageProbability * 100) + '%)'"></span>
+                  </template>
+                </template>
+              </div>
+
+              <!-- View Mode Controls -->
+              <div class="mb-4 flex flex-wrap items-center gap-2 text-xs">
+                <label class="flex items-center gap-1.5 cursor-pointer">
+                  <input type="radio" x-model="transcriptView" value="subtitle" class="hidden peer">
+                  <span class="px-2 py-1 rounded border text-slate-300 hover:text-white peer-checked:bg-cyan-500/20 peer-checked:border-cyan-400 peer-checked:text-cyan-300">Subtitle</span>
+                </label>
+                <label class="flex items-center gap-1.5 cursor-pointer">
+                  <input type="radio" x-model="transcriptView" value="timestamp" class="hidden peer">
+                  <span class="px-2 py-1 rounded border text-slate-300 hover:text-white peer-checked:bg-cyan-500/20 peer-checked:border-cyan-400 peer-checked:text-cyan-300">Timestamped</span>
+                </label>
+                <label class="flex items-center gap-1.5 cursor-pointer">
+                  <input type="radio" x-model="transcriptView" value="compact" class="hidden peer">
+                  <span class="px-2 py-1 rounded border text-slate-300 hover:text-white peer-checked:bg-cyan-500/20 peer-checked:border-cyan-400 peer-checked:text-cyan-300">Compact</span>
+                </label>
+
+                <label class="ml-auto flex items-center gap-1.5 cursor-pointer">
+                  <input type="checkbox" x-model="showTimestamps" class="rounded border-slate-600 text-cyan-500 focus:ring-cyan-500">
+                  <span class="text-slate-300">Timestamps</span>
+                </label>
+
+                <!-- Speaker Filter -->
+                <template x-if="speakerList().length > 1">
+                  <span class="text-slate-500">Speaker:</span>
+                  <select x-model="activeSpeaker" class="rounded border border-white/10 bg-slate-900 px-2 py-1 text-sm text-white outline-none focus:border-cyan-400">
+                    <option value="">All speakers</option>
+                    <template x-for="spk in speakerList()" :key="spk">
+                      <option :value="spk" x-text="spk"></option>
+                    </template>
+                  </select>
+                </template>
+
+                <!-- Actions -->
+                <button @click="copyTranscript()" class="ml-2 px-2 py-1 rounded border border-white/10 text-slate-300 hover:bg-white/5 text-xs">📋 Copy</button>
+                <button @click="exportSrt()" class="px-2 py-1 rounded border border-white/10 text-slate-300 hover:bg-white/5 text-xs">📄 SRT</button>
+              </div>
+
+              <!-- Segments -->
+              <div class="space-y-2" :class="nativeScript ? 'text-lg leading-relaxed' : ''">
+                <template x-for="seg in filteredSegments()" :key="seg.index">
+                  <div class="group rounded-lg p-3 hover:bg-white/5 transition" :class="speakerColor(getSpeaker(seg.index))">
+                    <div class="flex items-start gap-3">
+                      <!-- Speaker Chip -->
+                      <template x-if="transcriptView === 'subtitle'">
+                        <span class="flex-shrink-0 text-xs font-medium px-1.5 py-0.5 rounded" :class="speakerColor(getSpeaker(seg.index))" x-text="getSpeaker(seg.index)"></span>
+                      </template>
+                      <template x-if="transcriptView === 'timestamp'">
+                        <span class="flex-shrink-0 text-xs font-mono text-slate-400 w-20" x-text="fmtSegTime(seg.start_ms) + ' → ' + fmtSegTime(seg.end_ms)"></span>
+                        <span class="flex-shrink-0 text-xs font-medium px-1.5 py-0.5 rounded" :class="speakerColor(getSpeaker(seg.index))" x-text="getSpeaker(seg.index)"></span>
+                      </template>
+                      <template x-if="transcriptView === 'compact'">
+                        <span class="flex-shrink-0 text-xs font-mono text-slate-500" x-text="fmtSegTime(seg.start_ms)"></span>
+                      </template>
+
+                      <!-- Text -->
+                      <p class="flex-1 min-w-0 text-slate-100 break-words" x-text="seg.text"></p>
+                    </div>
+
+                    <!-- Full Timestamp Row (timestamp view only) -->
+                    <template x-if="transcriptView === 'timestamp' && showTimestamps">
+                      <div class="mt-1 ml-8 flex items-center gap-2 text-xs text-slate-500">
+                        <span class="font-mono" x-text="fmtSegTime(seg.start_ms) + ' → ' + fmtSegTime(seg.end_ms)"></span>
+                        <span class="text-slate-600" x-text="'(' + seg.duration_ms + ' ms)'"></span>
+                        <template x-if="seg.confidence !== undefined && seg.confidence !== null">
+                          <span class="text-emerald-400" x-text="'conf: ' + Math.round(seg.confidence * 100) + '%'"></span>
+                        </template>
+                      </div>
+                    </template>
+                  </div>
+                </template>
+
+                <template x-if="filteredSegments().length === 0">
+                  <p class="text-center text-slate-500 py-8">No segments match the current filter.</p>
+                </template>
+              </div>
+            </div>
+
+            <!-- Translation Section -->
+            <div class="rounded-xl border border-white/10 bg-slate-900/60 p-4 shadow-xl shadow-black/20 overflow-hidden">
+              <button
+                type="button"
+                @click="micTranslationExpanded = !micTranslationExpanded"
+                class="flex items-center justify-between w-full mb-3"
+              >
+                <h3 class="font-semibold text-slate-100 flex items-center gap-2">
+                  <svg class="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-5"></path></svg>
+                  Translation
+                </h3>
+                <svg class="w-5 h-5 text-slate-400 transition-transform" :class="micTranslationExpanded ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+              </button>
+
+              <template x-if="micTranslationExpanded">
+                <div class="space-y-3">
+                  <!-- Target Language -->
+                  <div class="flex items-center gap-3">
+                    <label class="text-sm text-slate-300 w-24">Target:</label>
+                    <select
+                      x-model="micTranslationTarget"
+                      class="flex-1 rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:border-cyan-400"
+                    >
+                      <option value="en">English (en)</option>
+                      <option value="es">Spanish (es)</option>
+                      <option value="fr">French (fr)</option>
+                      <option value="de">German (de)</option>
+                      <option value="zh">Chinese (zh)</option>
+                      <option value="ja">Japanese (ja)</option>
+                      <option value="ko">Korean (ko)</option>
+                      <option value="hi">Hindi (hi)</option>
+                      <option value="ar">Arabic (ar)</option>
+                      <option value="pt">Portuguese (pt)</option>
+                      <option value="ru">Russian (ru)</option>
+                      <option value="it">Italian (it)</option>
+                      <option value="nl">Dutch (nl)</option>
+                      <option value="pl">Polish (pl)</option>
+                      <option value="tr">Turkish (tr)</option>
+                      <option value="vi">Vietnamese (vi)</option>
+                    </select>
+                  </div>
+
+                  <!-- Translate Button -->
+                  <button
+                    type="button"
+                    @click="translateMic()"
+                    :disabled="micTranslationLoading || !takeId"
+                    class="w-full flex items-center justify-center gap-2 rounded-xl bg-cyan-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-500 disabled:opacity-50 disabled:cursor-not-allowed transition"
+                  >
+                    <template x-if="micTranslationLoading">
+                      <svg class="h-5 w-5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                      Translating…
+                    </template>
+                    <template x-if="!micTranslationLoading">
+                      <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-5"></path></svg>
+                      Translate to <span x-text="micTranslationTarget.toUpperCase()"></span>
+                    </template>
+                  </button>
+
+                  <!-- Translation Error -->
+                  <template x-if="micTranslationError">
+                    <div class="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200" x-text="micTranslationError"></div>
+                  </template>
+
+                  <!-- Translation Result -->
+                  <template x-if="micTranslationText && !micTranslationLoading">
+                    <div class="space-y-2">
+                      <div class="flex items-center justify-between">
+                        <h4 class="font-semibold text-slate-100">Translated Text (<span x-text="micTranslationSource.toUpperCase()"></span> → <span x-text="micTranslationTarget.toUpperCase()"></span>)</h4>
+                        <div class="flex items-center gap-2">
+                          <button @click="copyTranscript()" class="px-2 py-1 rounded border border-white/10 text-slate-300 hover:bg-white/5 text-xs">📋 Copy Translation</button>
+                          <button
+                            type="button"
+                            @click="stopTtsPlayback()"
+                            class="px-2 py-1 rounded border border-white/10 text-slate-300 hover:bg-white/5 text-xs"
+                          >⏹ Stop</button>
+                        </div>
+                      </div>
+                      <p class="text-slate-100 whitespace-pre-wrap" x-text="micTranslationText"></p>
+                    </div>
+                  </template>
+                </div>
+              </template>
+            </div>
+
+            <!-- Audio Players (collapsible) -->
+            <template x-if="saved && saved.url && !recording">
+              <details class="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4">
+                <summary class="flex items-center gap-2 cursor-pointer text-sm font-semibold text-amber-300">Raw Browser Capture</summary>
+                <div class="mt-3">
+                  <audio controls class="w-full" :src="saved.url"></audio>
+                  <a :href="saved.url" :download="saved.filename" class="mt-2 inline-block rounded-xl bg-amber-700 px-3 py-2 text-sm font-semibold text-white hover:bg-amber-600">⬇️ Download Raw</a>
+                </div>
+              </details>
+            </template>
+
+            <template x-if="normalized && normalized.output_url && !recording && !normalizing">
+              <details class="rounded-2xl border border-blue-500/20 bg-blue-500/5 p-4">
+                <summary class="flex items-center gap-2 cursor-pointer text-sm font-semibold text-blue-300">Normalized PCM WAV</summary>
+                <div class="mt-3">
+                  <p class="text-xs text-slate-400 mb-2">
+                    <span x-text="fmtSampleRate(normalized.sample_rate)"></span> · <span x-text="normalized.channels"></span> ch · <span x-text="normalized.bit_depth"></span>-bit · <span x-text="fmtBytes(normalized.size_bytes)"></span>
+                  </p>
+                  <audio controls class="w-full" :src="normalized.output_url"></audio>
+                  <a :href="normalized.output_url" :download="normalized.output_file" class="mt-2 inline-block rounded-xl bg-blue-700 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-600">⬇️ Download WAV</a>
+                </div>
+              </details>
+            </template>
+          </template>
+        </div>
       </template>
 
-      <!-- Recording (+ live preview) -->
+      <!-- Empty State (no tabs) -->
+      <template x-if="tabs.length === 0 && !recording && !saved && !connecting && !normalizing && !vadRunning && !transcribing">
+        <div class="space-y-4 text-center py-12">
+          <svg class="w-16 h-16 mx-auto text-slate-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path>
+          </svg>
+          <p class="text-slate-300 text-lg">TranStream Studio</p>
+          <p class="text-slate-500 max-w-md mx-auto">
+            Press <kbd class="px-2 py-1 bg-slate-800 rounded text-cyan-300 font-mono">Space</kbd> or click <span class="text-emerald-300">Record</span> to capture microphone audio.
+            Use the <span class="text-cyan-300">Media Gallery</span> on the left to upload and manage audio files.
+            Click any file with an existing transcription to open it instantly in a tab.
+          </p>
+          <div class="flex items-center justify-center gap-4 mt-6 text-xs text-slate-500">
+            <span>Pipeline: Record → Normalize → VAD → Whisper</span>
+            <span>Live preview streams while you speak</span>
+          </div>
+        </div>
+      </template>
+
+      <!-- Recording Live Preview -->
       <template x-if="recording">
-        <div class="space-y-3">
-          <p class="text-red-300">● Live ingestion active.</p>
-          <p class="text-slate-400">Speak now. 100 ms chunks are streaming to the backend.</p>
+        <div class="space-y-4">
+          <div class="rounded-xl border border-red-500/30 bg-red-500/5 p-4 animate-pulse">
+            <div class="flex items-center gap-3">
+              <span class="inline-flex h-3 w-3 rounded-full bg-red-500 animate-pulse"></span>
+              <p class="text-red-300 font-medium">● Live ingestion active</p>
+              <span class="ml-auto font-mono text-sm text-slate-200" x-text="fmtTime(elapsedMs)"></span>
+            </div>
+            <p class="mt-2 text-slate-400">Speak now. 100 ms chunks are streaming to the backend.</p>
+          </div>
 
           <template x-if="liveTranscriptText">
-            <div class="mt-4 rounded-xl border border-emerald-500/25 bg-emerald-500/5 p-4">
+            <div class="rounded-xl border border-emerald-500/25 bg-emerald-500/5 p-4">
               <div class="mb-2 flex items-center gap-2">
                 <span class="inline-flex h-2 w-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                <p class="text-xs font-semibold uppercase tracking-wider text-emerald-400">
-                  Live Transcript Preview
-                </p>
-                <span class="ml-auto text-[10px] text-slate-500">
-                  <span x-text="liveSegmentCount"></span> seg · rolling
-                </span>
+                <p class="text-xs font-semibold uppercase tracking-wider text-emerald-400">Live Transcript Preview</p>
+                <span class="ml-auto text-[10px] text-slate-500"><span x-text="liveSegmentCount"></span> seg · rolling</span>
               </div>
-              <p class="text-sm leading-relaxed text-slate-100" x-text="liveTranscriptText"></p>
-              <p class="mt-2 text-[11px] text-slate-500">
-                Interim text — the authoritative timestamped transcript replaces this after Stop.
-              </p>
+              <p class="text-sm leading-relaxed text-slate-100 whitespace-pre-wrap" x-text="liveTranscriptText"></p>
+              <p class="mt-2 text-[11px] text-slate-500">Interim text — the authoritative timestamped transcript replaces this after Stop.</p>
             </div>
           </template>
 
           <template x-if="!liveTranscriptText">
-            <p class="mt-4 text-xs text-slate-500">
-              Keep speaking ~3 seconds for the live preview to appear…
-            </p>
+            <p class="text-center text-xs text-slate-500 py-4">Keep speaking ~3 seconds for the live preview to appear…</p>
           </template>
         </div>
       </template>
 
-      <!-- Live Transcription Persisted (after stop) -->
-      <template x-if="!recording && saved && liveTranscriptText">
-        <div class="space-y-3">
-          <div class="mt-4 rounded-xl border border-emerald-500/25 bg-emerald-500/5 p-4">
-            <div class="mb-2 flex items-center gap-2">
-              <span class="inline-flex h-2 w-2 rounded-full bg-emerald-400"></span>
-              <p class="text-xs font-semibold uppercase tracking-wider text-emerald-400">
-                Live Transcript Preview (Last Update)
-              </p>
-              <span class="ml-auto text-[10px] text-slate-500">
-                <span x-text="liveSegmentCount"></span> seg
-              </span>
-            </div>
-            <p class="text-sm leading-relaxed text-slate-100" x-text="liveTranscriptText"></p>
-            <p class="mt-2 text-[11px] text-slate-500">
-              This was the rolling preview during recording. The authoritative transcript is below.
-            </p>
+      <!-- Live Transcript Persisted (after stop) -->
+      <template x-if="!recording && saved && liveTranscriptText && tabs.length === 0">
+        <div class="rounded-xl border border-emerald-500/25 bg-emerald-500/5 p-4">
+          <div class="mb-2 flex items-center gap-2">
+            <span class="inline-flex h-2 w-2 rounded-full bg-emerald-400"></span>
+            <p class="text-xs font-semibold uppercase tracking-wider text-emerald-400">Live Transcript Preview (Last Update)</p>
+            <span class="ml-auto text-[10px] text-slate-500"><span x-text="liveSegmentCount"></span> seg</span>
           </div>
+          <p class="text-sm leading-relaxed text-slate-100 whitespace-pre-wrap" x-text="liveTranscriptText"></p>
+          <p class="mt-2 text-[11px] text-slate-500">This was the rolling preview during recording. The authoritative transcript is below.</p>
         </div>
       </template>
 
-      <!-- Normalizing -->
-      <template x-if="normalizing && !recording">
-        <div class="space-y-3">
+      <!-- Processing States -->
+      <template x-if="normalizing && !recording && tabs.length === 0">
+        <div class="rounded-xl border border-blue-500/20 bg-blue-500/5 p-4">
           <p class="text-blue-300">⟳ Normalizing audio…</p>
-          <p class="text-slate-400" x-text="normalizeMessage">Converting to 16 kHz, 1-channel, 16-bit PCM WAV…</p>
+          <p class="text-slate-400" x-text="normalizeMessage"></p>
         </div>
       </template>
 
-      <!-- VAD running -->
-      <template x-if="vadRunning && !recording && !normalizing">
-        <div class="space-y-3">
+      <template x-if="vadRunning && !recording && !normalizing && tabs.length === 0">
+        <div class="rounded-xl border border-purple-500/20 bg-purple-500/5 p-4">
           <p class="text-purple-300">◈ Detecting speech segments…</p>
-          <p class="text-slate-400" x-text="vadMessage">Running Silero VAD on normalized audio…</p>
+          <p class="text-slate-400" x-text="vadMessage"></p>
         </div>
       </template>
 
-      <!-- Transcribing -->
-      <template x-if="transcribing && !recording && !normalizing && !vadRunning">
-        <div class="space-y-3">
+      <template x-if="transcribing && !recording && !normalizing && !vadRunning && tabs.length === 0">
+        <div class="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
           <p class="text-emerald-300">◈ Transcribing audio…</p>
-          <p class="text-slate-400" x-text="transcribeMessage">Running Faster-Whisper…</p>
+          <p class="text-slate-400" x-text="transcribeMessage"></p>
         </div>
       </template>
 
-      <!--
-        RESULTS.
-        Resilience fix: this block keys off `saved` only (plus "no stage active"),
-        NOT off VAD/transcript success. So even if a later stage fails, you still
-        see the raw + normalized evidence instead of being dumped back to Idle.
-      -->
-      <!-- ── Advanced Transcription Display ──
-           Production-grade subtitle/timestamp viewer with speaker diarization UI.
-           Renders both mic (transcriptSegments) and upload (upload.segments)
-           results in ONE shared window. Speaker labels are auto-assigned from
-           segment gaps (heuristic diarization) and fall back to backend
-           speaker_id when the pipeline emits it. -->
-      <template x-if="(saved || upload.takeId) && !recording && !connecting && !normalizing && !vadRunning && !transcribing && !upload.polling">
-        <div class="space-y-4">
-
-          <!-- Helper: pick the active segment set + metadata for whichever source has results -->
-          <template x-if="saved && transcriptSegments.length > 0">
-            <div class="rounded-xl border border-white/10 bg-slate-900/60 p-4 shadow-xl shadow-black/20 overflow-hidden">
-              <!-- Header bar -->
-              <div class="mb-3 flex items-center justify-between gap-4">
-                <div class="flex items-center gap-2">
-                  <h3 class="text-sm font-semibold text-emerald-300">🎙️ Live Recording — Transcription</h3>
-                </div>
-                <div class="flex items-center gap-2 text-xs">
-                  <span class="text-cyan-300 font-mono" x-text="saved.filename"></span>
-                  <span class="text-slate-500">·</span>
-                  <span class="text-emerald-400 font-semibold" x-text="transcriptSegments.length + ' segments'"></span>
-                </div>
-              </div>
-
-              <!-- View controls toolbar -->
-              <div class="border-t border-white/10 border-b border-white/10 pt-2 pb-3 mb-3 flex flex-wrap items-center justify-between gap-3">
-                <div class="flex items-center gap-3">
-                  <span class="text-xs text-slate-400 uppercase tracking-wider font-medium">View</span>
-                  <div class="inline-flex rounded-xl border border-white/10 bg-slate-950/60 px-1">
-                    <button type="button" @click="transcriptView = 'subtitle'"
-                            :class="transcriptView === 'subtitle' ? 'bg-indigo-600 text-white px-3 py-1.5 text-xs rounded-lg' : 'text-slate-400 hover:text-white px-3 py-1.5 text-xs rounded-lg transition'"
-                            title="Movie-style subtitles (clean text flow)">
-                      Subtitle
-                    </button>
-                    <button type="button" @click="transcriptView = 'timestamp'"
-                            :class="transcriptView === 'timestamp' ? 'bg-indigo-600 text-white px-3 py-1.5 text-xs rounded-lg' : 'text-slate-400 hover:text-white px-3 py-1.5 text-xs rounded-lg transition'"
-                            title="Timestamps on every line">
-                      Timestamps
-                    </button>
-                    <button type="button" @click="transcriptView = 'compact'"
-                            :class="transcriptView === 'compact' ? 'bg-indigo-600 text-white px-3 py-1.5 text-xs rounded-lg' : 'text-slate-400 hover:text-white px-3 py-1.5 text-xs rounded-lg transition'"
-                            title="Compact list view">
-                      Compact
-                    </button>
-                  </div>
-                </div>
-                <div class="flex items-center gap-2">
-                  <button type="button" @click="showTimestamps = !showTimestamps"
-                          :class="showTimestamps ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300'"
-                          class="rounded-lg px-2.5 py-1 text-xs font-semibold transition hover:bg-indigo-500/50"
-                          :title="showTimestamps ? 'Hide timestamps' : 'Show timestamps'">
-                    ⏱️
-                  </button>
-                  <button type="button" @click="copyTranscript()"
-                          class="rounded-lg bg-slate-800 px-2.5 py-1 text-xs font-semibold text-slate-300 transition hover:bg-slate-700"
-                          title="Copy transcript to clipboard">
-                    📋 Copy
-                  </button>
-                  <a :href="'/studio/jobs/' + takeId + '/transcript/?format=srt'"
-                     class="rounded-lg bg-slate-700 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-slate-600"
-                     title="Download .srt subtitle file">
-                    ⬇️ .srt
-                  </a>
-                </div>
-              </div>
-
-              <!-- File info (compact) -->
-              <div class="border-b border-white/10 pb-2 mb-3">
-                <p class="text-xs text-slate-400">
-                  <span class="text-slate-500">Language:</span>
-                  <span class="font-mono text-cyan-300" x-text="languageDetected || 'auto-detected'"></span>
-                  <span class="text-slate-500 ml-2">Duration:</span>
-                  <span class="text-cyan-300" x-text="fmtTime(saved.duration_ms)"></span>
-                  <span class="text-slate-500 ml-2">Segments:</span>
-                  <span class="text-emerald-400" x-text="transcriptSegments.length"></span>
-                </p>
-              </div>
-
-              <!-- Speaker filter chips -->
-              <div class="mb-3 flex flex-wrap gap-2 overflow-x-auto pb-1">
-                <button type="button" @click="activeSpeaker = ''"
-                        :class="activeSpeaker === ''
-                          ? 'bg-indigo-600 text-white px-3 py-1.5 rounded-lg text-xs font-semibold'
-                          : 'bg-slate-800 text-slate-400 px-3 py-1.5 rounded-lg text-xs hover:bg-slate-700 transition'"
-                        :title="activeSpeaker === '' ? 'All speakers' : 'Show all speakers'">
-                  All speakers
-                </button>
-                <template x-for="spk in speakerList" :key="spk">
-                  <button type="button" @click="activeSpeaker = spk"
-                          :class="activeSpeaker === spk
-                            ? 'bg-indigo-600 text-white px-3 py-1.5 rounded-lg text-xs font-semibold'
-                            : 'bg-slate-800 text-slate-300 px-3 py-1.5 rounded-lg text-xs hover:bg-slate-700 transition'"
-                          :class="speakerColor(spk)"
-                          :title="'Filter: ' + spk">
-                    <span class="inline-block w-2 h-2 rounded-full mr-1.5" :class="speakerColorClass(spk)"></span>
-                    <span x-text="spk"></span>
-                  </button>
-                </template>
-              </div>
-
-              <!-- Transcription segments -->
-              <div class="space-y-1">
-                <template x-for="(seg, i) in filteredMicSegments()" :key="seg.start_ms + '-' + i">
-                  <div class="rounded-lg border border-white/5 p-2.5 transition"
-                         :class="transcriptView === 'compact' ? 'bg-slate-950/40' : 'bg-slate-950/20 hover:bg-white/5'">
-                    <!-- Subtitle mode: speaker chip + flowing text -->
-                    <template x-if="transcriptView === 'subtitle'">
-                      <div class="flex items-start gap-2">
-                        <span class="mt-0.5 shrink-0 rounded-full bg-indigo-500/20 text-indigo-300 text-[10px] px-1.5 py-0.5 font-bold uppercase tracking-tighter"
-                              :class="speakerColorClass(getSpeaker(seg.index))"
-                              x-text="getSpeaker(seg.index)"></span>
-                        <span class="text-slate-100 leading-relaxed whitespace-pre-wrap break-words"
-                              x-text="seg.text"
-                              :class="nativeScript ? 'text-lg' : 'text-sm'"></span>
-                        <template x-if="showTimestamps">
-                          <span class="ml-auto mt-0.5 shrink-0 font-mono text-[10px] text-slate-500"
-                                x-text="fmtSegTime(seg.start_ms) + ' → ' + fmtSegTime(seg.end_ms)"></span>
-                        </template>
-                      </div>
-                    </template>
-
-                    <!-- Timestamp mode: detailed per-line -->
-                    <template x-if="transcriptView === 'timestamp'">
-                      <div class="flex items-start gap-3">
-                        <span class="mt-0.5 shrink-0 font-mono text-xs text-emerald-400"
-                              x-text="fmtSegTime(seg.start_ms) + ' → ' + fmtSegTime(seg.end_ms)"></span>
-                        <div class="flex-1">
-                          <span class="shrink-0 rounded-full bg-indigo-500/20 text-indigo-300 text-[10px] px-1.5 py-0.5 font-bold uppercase tracking-tighter mr-2"
-                                :class="speakerColorClass(getSpeaker(seg.index))"
-                                x-text="getSpeaker(seg.index)"></span>
-                          <span class="text-slate-100 whitespace-pre-wrap break-words"
-                                x-text="seg.text"
-                                :class="nativeScript ? 'text-lg' : 'text-sm'"></span>
-                        </div>
-                        <span class="shrink-0 font-mono text-[10px] text-slate-500"
-                              x-text="seg.duration_ms ? ('(' + (seg.duration_ms / 1000).toFixed(1) + 's)') : ''"></span>
-                      </div>
-                    </template>
-
-                    <!-- Compact mode: dense single line -->
-                    <template x-if="transcriptView === 'compact'">
-                      <div class="flex items-baseline gap-2">
-                        <span class="mt-0 shrink-0 rounded-full bg-indigo-500/20 text-indigo-300 text-[10px] px-1.5 py-0.5 font-bold uppercase tracking-tighter"
-                              :class="speakerColorClass(getSpeaker(seg.index))"
-                                x-text="getSpeaker(seg.index)"></span>
-                        <template x-if="showTimestamps">
-                          <span class="font-mono text-[10px] text-cyan-400" x-text="fmtSegTime(seg.start_ms)"></span>
-                        </template>
-                        <span class="text-slate-100 text-sm whitespace-pre-wrap break-words" x-text="seg.text"></span>
-                      </div>
-                    </template>
-                  </div>
-                </template>
-              </div>
-
-              <!-- Translation section for mic -->
-              <div class="mt-5 border-t border-white/10 pt-4">
-                <div class="mb-3 flex items-center justify-between gap-3">
-                  <label class="mb-0 block text-sm font-medium text-slate-400 uppercase tracking-wider">Translate Transcription</label>
-                  <div class="flex items-center gap-2">
-                    <button type="button" @click="toggleTranslationExpand('mic')"
-                            :class="micTranslationExpanded ? 'text-indigo-400' : 'text-slate-500'"
-                            class="text-xs font-semibold hover:text-indigo-300 transition">
-                      {{ micTranslationExpanded ? 'Collapse' : 'Translate & Speak' }}
-                    </button>
-                  </div>
-                </div>
-                <template x-if="micTranslationExpanded">
-                  <div class="flex flex-wrap items-center gap-2">
-                    <select
-                            x-model="micTranslationTarget"
-                            :disabled="micTranslationLoading"
-                            class="min-w-[180px] rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-sm text-slate-300 outline-none focus:border-cyan-400">
-                      <option value="en">English</option>
-                      <option value="fr">French</option>
-                      <option value="es">Spanish</option>
-                      <option value="de">German</option>
-                      <option value="hi">Hindi</option>
-                      <option value="ar">Arabic</option>
-                      <option value="zh">Chinese</option>
-                      <option value="ja">Japanese</option>
-                    </select>
-                    <button type="button" @click="translateMic()"
-                            :disabled="!takeId || micTranslationLoading"
-                            :class="micTranslationLoading
-                              ? 'bg-slate-700/60 text-slate-400 cursor-not-allowed'
-                              : 'bg-indigo-600 px-3 py-2 text-sm font-semibold text-white transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400'">
-                      🔀 Translate & Speak
-                    </button>
-                    <button type="button" @click="stopTtsPlayback()"
-                            :disabled="!ttsPlaying"
-                            class="rounded-xl bg-rose-600 px-3 py-2 text-sm font-semibold text-white transition hover:bg-rose-500 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400">
-                      ⏹️ Stop Playback
-                    </button>
-                  </div>
-                  <p x-show="micTranslationError" class="mt-2 text-xs text-rose-400" x-text="micTranslationError"></p>
-                  <div x-show="micTranslationText" class="mt-3 pt-3 border-t border-white/10">
-                    <p class="mb-1 text-xs font-medium text-slate-400 uppercase tracking-wider"
-                       x-text="'Translated (' + micTranslationSource + ' → ' + micTranslationTarget + ')'"></p>
-                    <p class="text-sm text-emerald-300 whitespace-pre-wrap break-words" x-text="micTranslationText"></p>
-                  </div>
-                  <p x-show="micTranslationLoading" class="mt-3 text-xs text-cyan-400">Translating & synthesizing speech…</p>
-                  <audio x-ref="ttsAudio" preload="auto" controls class="w-full mt-3" style="display: none;"></audio>
-                </template>
-              </div>
-
-            </div>
-          </template>
-
-          <!-- Upload Results - same advanced display -->
-          <template x-if="upload.takeId && upload.segments.length > 0">
-            <div class="rounded-xl border border-white/10 bg-slate-900/60 p-4 shadow-xl shadow-black/20 overflow-hidden">
-              <!-- Header bar -->
-              <div class="mb-3 flex items-center justify-between gap-4">
-                <div class="flex items-center gap-2">
-                  <h3 class="text-sm font-semibold text-cyan-300">📤 Uploaded File — Transcription</h3>
-                </div>
-                <div class="flex items-center gap-2 text-xs">
-                  <span class="text-cyan-300 font-mono" x-text="upload.name"></span>
-                  <span class="text-slate-500">·</span>
-                  <span class="text-emerald-400 font-semibold" x-text="upload.segments.length + ' segments'"></span>
-                </div>
-              </div>
-
-              <!-- View controls toolbar (shared state with mic view) -->
-              <div class="border-t border-white/10 border-b border-white/10 pt-2 pb-3 mb-3 flex flex-wrap items-center justify-between gap-3">
-                <div class="flex items-center gap-3">
-                  <span class="text-xs text-slate-400 uppercase tracking-wider font-medium">View</span>
-                  <div class="inline-flex rounded-xl border border-white/10 bg-slate-950/60 px-1">
-                    <button type="button" @click="transcriptView = 'subtitle'"
-                            :class="transcriptView === 'subtitle' ? 'bg-indigo-600 text-white px-3 py-1.5 text-xs rounded-lg' : 'text-slate-400 hover:text-white px-3 py-1.5 text-xs rounded-lg transition'"
-                            title="Movie-style subtitles (clean text flow)">
-                      Subtitle
-                    </button>
-                    <button type="button" @click="transcriptView = 'timestamp'"
-                            :class="transcriptView === 'timestamp' ? 'bg-indigo-600 text-white px-3 py-1.5 text-xs rounded-lg' : 'text-slate-400 hover:text-white px-3 py-1.5 text-xs rounded-lg transition'"
-                            title="Timestamps on every line">
-                      Timestamps
-                    </button>
-                    <button type="button" @click="transcriptView = 'compact'"
-                            :class="transcriptView === 'compact' ? 'bg-indigo-600 text-white px-3 py-1.5 text-xs rounded-lg' : 'text-slate-400 hover:text-white px-3 py-1.5 text-xs rounded-lg transition'"
-                            title="Compact list view">
-                      Compact
-                    </button>
-                  </div>
-                </div>
-                <div class="flex items-center gap-2">
-                  <button type="button" @click="showTimestamps = !showTimestamps"
-                          :class="showTimestamps ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300'"
-                          class="rounded-lg px-2.5 py-1 text-xs font-semibold transition hover:bg-indigo-500/50"
-                          :title="showTimestamps ? 'Hide timestamps' : 'Show timestamps'">
-                    ⏱️
-                  </button>
-                  <button type="button" @click="copyUploadTranscript()"
-                          class="rounded-lg bg-slate-800 px-2.5 py-1 text-xs font-semibold text-slate-300 transition hover:bg-slate-700"
-                          title="Copy transcript to clipboard">
-                    📋 Copy
-                  </button>
-                  <a :href="'/studio/jobs/' + upload.jobId + '/transcript/?format=srt'"
-                     class="rounded-lg bg-slate-700 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-slate-600"
-                     title="Download .srt subtitle file">
-                    ⬇️ .srt
-                  </a>
-                </div>
-              </div>
-
-              <!-- File info (compact) -->
-              <div class="border-b border-white/10 pb-2 mb-3">
-                <p class="text-xs text-slate-400">
-                  <span class="text-slate-500">Language:</span>
-                  <span class="font-mono text-cyan-300" x-text="upload.language || 'auto-detected'"></span>
-                  <span class="text-slate-500 ml-2">Duration:</span>
-                  <span class="text-cyan-300" x-text="fmtTime(upload.durationMs)"></span>
-                  <span class="text-slate-500 ml-2">Segments:</span>
-                  <span class="text-emerald-400" x-text="upload.segments.length"></span>
-                </p>
-              </div>
-
-              <!-- Speaker filter chips -->
-              <div class="mb-3 flex flex-wrap gap-2 overflow-x-auto pb-1">
-                <button type="button" @click="activeSpeaker = ''"
-                        :class="activeSpeaker === ''
-                          ? 'bg-indigo-600 text-white px-3 py-1.5 rounded-lg text-xs font-semibold'
-                          : 'bg-slate-800 text-slate-400 px-3 py-1.5 rounded-lg text-xs hover:bg-slate-700 transition'"
-                        :title="activeSpeaker === '' ? 'All speakers' : 'Show all speakers'">
-                  All speakers
-                </button>
-                <template x-for="spk in uploadSpeakerList" :key="spk">
-                  <button type="button" @click="activeSpeaker = spk"
-                          :class="activeSpeaker === spk
-                            ? 'bg-indigo-600 text-white px-3 py-1.5 rounded-lg text-xs font-semibold'
-                            : 'bg-slate-800 text-slate-300 px-3 py-1.5 rounded-lg text-xs hover:bg-slate-700 transition'"
-                          :class="speakerColor(spk)"
-                          :title="'Filter: ' + spk">
-                    <span class="inline-block w-2 h-2 rounded-full mr-1.5" :class="speakerColorClass(spk)"></span>
-                    <span x-text="spk"></span>
-                  </button>
-                </template>
-              </div>
-
-              <!-- Transcription segments -->
-              <div class="space-y-1">
-                <template x-for="(seg, i) in filteredUploadSegments()" :key="seg.start_ms + '-' + i">
-                  <div class="rounded-lg border border-white/5 p-2.5 transition"
-                         :class="transcriptView === 'compact' ? 'bg-slate-950/40' : 'bg-slate-950/20 hover:bg-white/5'">
-                    <!-- Subtitle mode -->
-                    <template x-if="transcriptView === 'subtitle'">
-                      <div class="flex items-start gap-2">
-                        <span class="mt-0.5 shrink-0 rounded-full bg-cyan-500/20 text-cyan-300 text-[10px] px-1.5 py-0.5 font-bold uppercase tracking-tighter"
-                              :class="speakerColorClass(getUploadSpeaker(seg.index))"
-                              x-text="getUploadSpeaker(seg.index)"></span>
-                        <span class="text-slate-100 leading-relaxed whitespace-pre-wrap break-words"
-                              x-text="seg.text"
-                              :class="nativeScript ? 'text-lg' : 'text-sm'"></span>
-                        <template x-if="showTimestamps">
-                          <span class="ml-auto mt-0.5 shrink-0 font-mono text-[10px] text-slate-500"
-                                x-text="fmtSegTime(seg.start_ms) + ' → ' + fmtSegTime(seg.end_ms)"></span>
-                        </template>
-                      </div>
-                    </template>
-
-                    <!-- Timestamp mode -->
-                    <template x-if="transcriptView === 'timestamp'">
-                      <div class="flex items-start gap-3">
-                        <span class="mt-0.5 shrink-0 font-mono text-xs text-cyan-400"
-                              x-text="fmtSegTime(seg.start_ms) + ' → ' + fmtSegTime(seg.end_ms)"></span>
-                        <div class="flex-1">
-                          <span class="shrink-0 rounded-full bg-cyan-500/20 text-cyan-300 text-[10px] px-1.5 py-0.5 font-bold uppercase tracking-tighter mr-2"
-                                :class="speakerColorClass(getUploadSpeaker(seg.index))"
-                                x-text="getUploadSpeaker(seg.index)"></span>
-                          <span class="text-slate-100 whitespace-pre-wrap break-words"
-                                x-text="seg.text"
-                                :class="nativeScript ? 'text-lg' : 'text-sm'"></span>
-                        </div>
-                        <span class="shrink-0 font-mono text-[10px] text-slate-500"
-                              x-text="seg.duration_ms ? ('(' + (seg.duration_ms / 1000).toFixed(1) + 's)') : ''"></span>
-                      </div>
-                    </template>
-
-                    <!-- Compact mode -->
-                    <template x-if="transcriptView === 'compact'">
-                      <div class="flex items-baseline gap-2">
-                        <span class="mt-0 shrink-0 rounded-full bg-cyan-500/20 text-cyan-300 text-[10px] px-1.5 py-0.5 font-bold uppercase tracking-tighter"
-                              :class="speakerColorClass(getUploadSpeaker(seg.index))"
-                              x-text="getUploadSpeaker(seg.index)"></span>
-                        <template x-if="showTimestamps">
-                          <span class="font-mono text-[10px] text-cyan-400" x-text="fmtSegTime(seg.start_ms)"></span>
-                        </template>
-                        <span class="text-slate-100 text-sm whitespace-pre-wrap break-words" x-text="seg.text"></span>
-                      </div>
-                    </template>
-                  </div>
-                </template>
-              </div>
-
-              <!-- Translation section for upload -->
-              <div class="mt-5 border-t border-white/10 pt-4">
-                <div class="mb-3 flex items-center justify-between gap-3">
-                  <label class="mb-0 block text-sm font-medium text-slate-400 uppercase tracking-wider">Translate Transcription</label>
-                  <div class="flex items-center gap-2">
-                    <button type="button" @click="toggleTranslationExpand('upload')"
-                            :class="uploadTranslationExpanded ? 'text-indigo-400' : 'text-slate-500'"
-                            class="text-xs font-semibold hover:text-indigo-300 transition">
-                      {{ uploadTranslationExpanded ? 'Collapse' : 'Translate' }}
-                    </button>
-                  </div>
-                </div>
-                <template x-if="uploadTranslationExpanded">
-                  <div class="flex flex-wrap items-center gap-2">
-                    <select
-                            x-model="upload.translationTarget"
-                            :disabled="upload.translationLoading"
-                            class="min-w-[180px] rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-sm text-slate-300 outline-none focus:border-cyan-400">
-                      <option value="en">English</option>
-                      <option value="fr">French</option>
-                      <option value="es">Spanish</option>
-                      <option value="de">German</option>
-                      <option value="hi">Hindi</option>
-                      <option value="ar">Arabic</option>
-                      <option value="zh">Chinese</option>
-                      <option value="ja">Japanese</option>
-                    </select>
-                    <button type="button" @click="translateUpload()"
-                            :disabled="!upload.takeId || upload.translationLoading"
-                            :class="upload.translationLoading
-                              ? 'bg-slate-700/60 text-slate-400 cursor-not-allowed'
-                              : 'bg-indigo-600 px-3 py-2 text-sm font-semibold text-white transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400'">
-                      🔀 Translate
-                    </button>
-                  </div>
-                  <p x-show="upload.translationError" class="mt-2 text-xs text-rose-400" x-text="upload.translationError"></p>
-                  <div x-show="upload.translationText" class="mt-3 pt-3 border-t border-white/10">
-                    <p class="mb-1 text-xs font-medium text-slate-400 uppercase tracking-wider"
-                       x-text="'Translated (' + upload.translationSource + ' → ' + upload.translationTarget + ')'"></p>
-                    <p class="text-sm text-emerald-300 whitespace-pre-wrap break-words" x-text="upload.translationText"></p>
-                  </div>
-                  <p x-show="upload.translationLoading" class="mt-3 text-xs text-cyan-400">Translating…</p>
-                </template>
-              </div>
-
-            </div>
-          </template>
-
+      <!-- Upload Processing (inline, when upload tab is active) -->
+      <template x-if="upload.uploading || upload.polling">
+        <div class="rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-4">
+          <div class="mb-2 flex items-center gap-2">
+            <svg class="h-5 w-5 animate-spin text-cyan-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+            <p class="text-cyan-300" x-text="uploadStatusLabel()"></p>
+          </div>
+          <div class="h-1.5 w-full overflow-hidden rounded-full bg-slate-800">
+            <div class="h-full rounded-full bg-cyan-400 transition-all duration-300" :style="'width:' + (upload.uploading ? upload.progress : upload.pct) + '%'"></div>
+          </div>
         </div>
       </template>
     </div>
+  </main>
 
-    <!-- Raw Audio Player -->
-    <div x-show="saved && saved.url && !recording" x-cloak
-         class="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4 shadow-xl shadow-black/20">
-      <h3 class="mb-1 text-sm font-semibold text-amber-300">Raw Browser Capture</h3>
-      <p class="mb-3 text-xs text-slate-500" x-text="saved ? saved.mime : ''"></p>
-      <audio controls class="w-full" :src="saved ? saved.url : ''"></audio>
-      <div class="mt-3 flex flex-wrap gap-2">
-        <a :href="saved ? saved.url : '#'" :download="saved ? saved.filename : ''"
-           class="rounded-xl bg-amber-700 px-3 py-2 text-sm font-semibold text-white transition hover:bg-amber-600">
-          ⬇️ Download Raw
-        </a>
-        <button type="button"
-                @click="saved = null; normalized = null; normalizeMessage = ''; vadSegments = []; vadTotalSpeechMs = 0; vadMessage = ''; transcriptSegments = []; languageDetected = ''; languageProbability = 0; liveTranscriptText = ''; liveSegmentCount = 0; liveLanguage = ''"
-                class="rounded-xl bg-slate-700 px-3 py-2 text-sm font-semibold text-white transition hover:bg-slate-600">
-          Clear Result
-        </button>
+  <!-- Settings Modal -->
+  <div x-show="showSettings" x-cloak class="fixed inset-0 z-50 flex items-center justify-center">
+    <div class="fixed inset-0 bg-black/50" @click="showSettings = false"></div>
+    <div class="relative z-10 w-full max-w-lg rounded-2xl border border-white/10 bg-slate-900 p-6 shadow-2xl">
+      <div class="flex items-center justify-between mb-6">
+        <h2 class="text-lg font-semibold">Media Gallery Settings</h2>
+        <button @click="showSettings = false" class="text-slate-400 hover:text-white">✕</button>
       </div>
-    </div>
-
-    <!-- Normalized Audio Player -->
-    <div x-show="normalized && normalized.output_url && !recording && !normalizing" x-cloak
-         class="rounded-2xl border border-blue-500/20 bg-blue-500/5 p-4 shadow-xl shadow-black/20">
-      <h3 class="mb-1 text-sm font-semibold text-blue-300">Normalized PCM WAV</h3>
-      <p class="mb-3 text-xs text-slate-400">
-        <span x-text="normalized ? fmtSampleRate(normalized.sample_rate) : ''"></span>
-        · <span x-text="normalized ? normalized.channels : ''"></span> channel
-        · <span x-text="normalized ? normalized.bit_depth : ''"></span>-bit
-        · <span x-text="normalized ? fmtBytes(normalized.size_bytes) : ''"></span>
-      </p>
-      <audio controls class="w-full" :src="normalized ? normalized.output_url : ''"></audio>
-      <div class="mt-3 flex flex-wrap gap-2">
-        <a :href="normalized ? normalized.output_url : '#'" :download="normalized ? normalized.output_file : ''"
-           class="rounded-xl bg-blue-700 px-3 py-2 text-sm font-semibold text-white transition hover:bg-blue-600">
-          ⬇️ Download WAV
-        </a>
-      </div>
-    </div>
-
-    <!-- Controls -->
-    <div class="flex flex-wrap gap-2">
-      <button type="button" @click="start()" :disabled="pipelineBusy()"
-              class="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400">
-        🎤 Start
-      </button>
-      <button type="button" @click="stop()" :disabled="!recording"
-              class="rounded-xl bg-rose-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-rose-500 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400">
-        ⏹️ Stop
-      </button>
-      <button type="button" @click="pickUploadFile()"
-              class="rounded-xl bg-cyan-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-cyan-600">
-        📤 Upload
-      </button>
-    </div>
-
-    <!-- ── Phase 7: File Upload panel ──
-         Completely independent of the mic canvas above: reads only the pure
-         formatters, writes only into `upload.*`. An upload can therefore run
-         while a mic take is in flight without either clobbering the other. -->
-    <div class="rounded-2xl border border-white/10 bg-slate-900/60 p-4 shadow-xl shadow-black/20">
-      <div class="mb-3 flex items-center justify-between gap-3">
-        <h3 class="text-sm font-semibold text-cyan-300">Upload Audio File</h3>
-        <span class="text-xs text-slate-500" x-text="uploadStatusLabel()">No file selected</span>
-      </div>
-
-      <input id="ts-upload-input" type="file" class="hidden"
-             accept=".mp3,.wav,.m4a,.flac,.ogg,.aac,.wma,.webm"
-             @change="onUploadFileChosen($event)" />
-
-      <!-- Drop zone -->
-      <div
-        @dragover="onUploadDragOver($event)"
-        @dragleave="onUploadDragLeave($event)"
-        @drop="onUploadDrop($event)"
-        @click="if (!upload.file) pickUploadFile()"
-        class="cursor-pointer rounded-xl border-2 border-dashed px-4 py-6 text-center transition"
-        :class="upload.dragOver ? 'border-cyan-400 bg-cyan-500/10'
-                              : 'border-white/15 bg-slate-950/40 hover:border-cyan-500/50'"
-      >
-        <template x-if="!upload.file">
-          <div>
-            <p class="text-sm text-slate-300">Drop an audio file here, or click to browse.</p>
-            <p class="mt-1 text-xs text-slate-500">
-              .mp3 · .wav · .m4a · .flac · .ogg · .aac · .wma · .webm — up to 100 MB
-            </p>
+      <div class="space-y-4">
+        <template x-for="root in roots" :key="root.id">
+          <div class="rounded-xl border border-white/10 bg-slate-950/50 p-4 space-y-3">
+            <div class="flex items-center gap-3">
+              <input type="text" x-model="root.name" class="flex-1 rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:border-cyan-400" placeholder="Folder name">
+              <input type="text" x-model="root.path" class="flex-1 rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:border-cyan-400" placeholder="Local path (e.g. /home/user/recordings)">
+              <button @click="removeRoot(root)" class="p-2 rounded text-rose-400 hover:text-rose-300" title="Remove">🗑️</button>
+            </div>
           </div>
         </template>
-        <template x-if="upload.file">
-          <div>
-            <p class="break-all font-mono text-sm text-cyan-200" x-text="upload.name"></p>
-            <p class="mt-1 text-xs text-slate-500">
-              <span x-text="fmtBytes(upload.size)"></span>
-              <span x-show="upload.takeId" class="ml-2 font-mono text-slate-600"
-                    x-text="'take ' + (upload.takeId || '').slice(0, 8)"></span>
-            </p>
-          </div>
-        </template>
-      </div>
-
-      <!-- Dual progress: amber = bytes to server, emerald = worker pipeline -->
-      <div class="mt-3 space-y-2">
-        <div x-show="upload.uploading" x-cloak>
-          <div class="mb-1 flex justify-between text-[11px] text-slate-500">
-            <span>Bytes to server</span><span x-text="upload.progress + '%'"></span>
-          </div>
-          <div class="h-1.5 w-full overflow-hidden rounded-full bg-slate-800">
-            <div class="h-full rounded-full bg-amber-400 transition-all duration-150"
-                 :style="'width:' + upload.progress + '%'"></div>
-          </div>
-        </div>
-
-        <div x-show="upload.polling" x-cloak>
-          <div class="mb-1 flex justify-between text-[11px] text-slate-500">
-            <span>Background worker</span><span x-text="upload.pct + '%'"></span>
-          </div>
-          <div class="h-1.5 w-full overflow-hidden rounded-full bg-slate-800">
-            <div class="h-full rounded-full bg-emerald-400 transition-all duration-300"
-                 :style="'width:' + upload.pct + '%'"></div>
-          </div>
+        <button @click="addRoot()" class="w-full rounded-xl border-2 border-dashed border-cyan-400/50 bg-cyan-500/5 px-4 py-3 text-sm font-medium text-cyan-300 hover:bg-cyan-500/10 transition">+ Add Root Folder</button>
+        <div class="pt-4 border-t border-white/10 flex justify-end gap-2">
+          <button @click="saveSettings()" class="rounded-xl bg-cyan-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-500">Save</button>
+          <button @click="showSettings = false" class="rounded-xl bg-slate-700 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-600">Cancel</button>
         </div>
       </div>
-
-      <!-- Upload error -->
-      <div x-show="upload.error" x-cloak
-           class="mt-3 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
-        <span x-show="upload.code" class="mr-1 font-mono text-rose-400"
-              x-text="'[' + upload.code + ']'"></span>
-        <span class="break-all" x-text="upload.error"></span>
-      </div>
-
-      <!-- Actions -->
-      <div class="mt-3 flex flex-wrap gap-2">
-        <button type="button" @click="clearUpload()"
-                class="rounded-xl bg-slate-700 px-3 py-2 text-sm font-semibold text-white transition hover:bg-slate-600">
-          Clear
-        </button>
-
-        <template x-if="upload.state === 'done' && upload.jobId">
-          <div class="flex flex-wrap gap-2">
-            <a :href="'/studio/jobs/' + upload.jobId + '/transcript/?format=srt'"
-               class="rounded-xl bg-slate-700 px-3 py-2 text-sm font-semibold text-white transition hover:bg-slate-600">
-              ⬇️ .srt
-            </a>
-            <a :href="'/studio/jobs/' + upload.jobId + '/transcript/?format=vtt'"
-               class="rounded-xl bg-slate-700 px-3 py-2 text-sm font-semibold text-white transition hover:bg-slate-600">
-              ⬇️ .vtt
-            </a>
-            <a :href="'/studio/jobs/' + upload.jobId + '/transcript/?format=txt'"
-               class="rounded-xl bg-slate-700 px-3 py-2 text-sm font-semibold text-white transition hover:bg-slate-600">
-              ⬇️ .txt
-            </a>
-          </div>
-        </template>
-      </div>
-
-      <p class="mt-3 text-[11px] text-slate-600">
-        Uploads are processed by the background worker
-        (<code class="text-slate-500">python manage.py tsworker</code>), not by the
-        web server — so a status stuck at “Queued” means the worker is not running,
-        not that the upload failed.
-      </p>
     </div>
+  </div>
 
-  </section>
+  <!-- Rename Modal -->
+  <div x-show="renameItem" x-cloak class="fixed inset-0 z-50 flex items-center justify-center">
+    <div class="fixed inset-0 bg-black/50" @click="cancelRename()"></div>
+    <div class="relative z-10 w-full max-w-md rounded-2xl border border-white/10 bg-slate-900 p-6 shadow-2xl">
+      <h3 class="text-lg font-semibold mb-4" x-text="'Rename ' + (renameItem.type === 'folder' ? 'Folder' : 'File')"></h3>
+      <input type="text" x-model="renameItem.newName" x-ref="renameInput" @keyup.enter="confirmRename()" class="w-full rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:border-cyan-400 mb-4">
+      <div class="flex justify-end gap-2">
+        <button @click="confirmRename()" class="rounded-xl bg-cyan-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-500">Rename</button>
+        <button @click="cancelRename()" class="rounded-xl bg-slate-700 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-600">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Hidden file input for Media Gallery uploads -->
+  <input type="file" id="ts-mg-upload-input" multiple accept="audio/*" x-ref="mgUploadInput" @change="onMgFileChosen" class="hidden">
+
 </div>
 {% endblock %}
 

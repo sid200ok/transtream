@@ -395,6 +395,64 @@ All existing guards (patchkit, layers, pipeline invariants, append-only log)
 still apply. New TTS code must not introduce file truncation or deletion.
 No `pip install` without explicit owner approval.
 
+### 5.4 UI Overhaul — Media Gallery + Transcription Tabs (this session)
+
+The owner directed a comprehensive UI/UX overhaul based on reference images
+(§5.3). The completed work:
+
+**Media Gallery (left sidebar)**
+- `fixed left-0 top-0 z-40 h-full` — touches left screen edge, full height.
+- Collapsible: 64 px icon strip when collapsed (`isCollapsed`), 320 px default
+  (configurable via CSS `--sidebar-width`), max 600 px, min 200 px.
+- Resizable: 1 px handle on right edge, `cursor: col-resize`, drag updates
+  `--sidebar-width` which the main area watches via `:style`.
+- Scrollable content: `overflow-y-auto` on the gallery body.
+- Two root folders by default: "Uploaded Audio" and "Recorded Audio".
+  Each root: editable name (dblclick or Settings), local `path` string
+  (stored in localStorage, not yet hooked to backend file I/O), expand/collapse.
+- Nested folders: "+" button creates child folders; folders show recursive tree
+  via `renderFolderTree()` emitting HTML.
+- Rename: dblclick any name or Settings → inline input → Enter/blur saves.
+- Delete: trash icon on root; for nested, trash in tree.
+- Settings modal: add/remove roots, set paths, persisted to `localStorage`
+  (`ts_media_roots_v1`).
+
+**Click-to-view existing transcription**
+- Clicking an audio file node with `takeId` calls `openExistingTab()`:
+  `GET /studio/takes/<take_id>/transcript/?format=json` → renders in new tab.
+- If `takeId` is null (file never uploaded/transcribed), the click triggers
+  `uploadFileToNode()` which POSTs to `/studio/upload/`, polls the job, and
+  auto-opens a tab on completion. **No file is transcribed twice.**
+
+**Multiple transcription tabs**
+- `tabs[]` array on `studioRecorder`; each tab is an object with:
+  `{id, title, source:'mic'|'upload', takeId, segments[], language,
+  languageProbability, durationMs, saved?, translationTarget, translationText,
+  translationSource, translationLoading, translationError}`.
+- Tab bar: horizontal scrollable (`overflow-x-auto`), close button per tab.
+- Active tab content rendered inline (not a separate component) — segments,
+  view mode, speaker filter, translation section, copy/SRT export.
+- View mode: Subtitle / Timestamped / Compact (radio group).
+- Timestamp toggle: checkbox.
+- Speaker filter: select (populated from heuristic diarization).
+- Translation: per-tab target language, translate button, result shown inline.
+- Copy transcript / Export SRT buttons.
+
+**Single mic toggle**
+- `toggleRecording()` replaces separate `start()` / `stop()`.
+- Button shows mic icon + "Record" (idle) or square icon + "Stop" (recording).
+- Disabled while `connecting || normalizing || vadRunning || transcribing`.
+
+**Fixed transcription window**
+- Main area: `position: fixed; top: 0; right: 0; bottom: 0; overflow-y: auto`.
+- Left margin tracks sidebar width via `:style="{ left: isCollapsed ? '64px' : '320px' }"`.
+- Browser zoom changes only `font-size` (rem-based); layout is viewport-fixed,
+  no content shifts.
+
+**Removed upload panel**
+- Old bottom upload panel deleted. Uploads now route exclusively through
+  Media Gallery → `uploadFileToNode()` → POST `/studio/upload/`.
+
 ## 6. Invariants that must never be broken
 
 These are the system's immune responses. Removing one to make a patch easier is
@@ -489,7 +547,12 @@ witness in the same session:
 4. **Every Phase 9 control is either functional or honestly absent.** No button may
    be `disabled` with a title promising a future phase unless that phase is
    scheduled in §5. Today: Native Script (functional in code, **unverified in
-   behaviour**), Translate, TTS, Avatar, Save, workspace manager.
+   behaviour**), Translate, TTS, Avatar, **Save → transcription tabs**, **workspace manager → Media Gallery**.
+   Media Gallery is functional: two root folders (Uploaded Audio / Recorded Audio),
+   configurable local paths via settings, rename folders/files, click-to-load
+   existing transcription, multi-tab transcription, multi-file upload/transcribe.
+   Tabs replace Save: each recording/upload opens its own tab; clicking a file in
+   the gallery opens its existing transcription without re-processing.
 5. §4's two false pushed claims are repaired forward, and the repair commit exists.
 6. §5 step C lands with the skip simulation printing **rc=1 and `15/16`** — the
    instrument is shown stopping itself on the input class that broke it.
@@ -502,5 +565,31 @@ witness in the same session:
 9. **No claim anywhere in the git record is unsupported by this session's output.**
    This is the clause that makes the other eight meaningful.
 
-Not in scope, by the owner's instruction, with receipts (§5.3): Save, workspace
-panels, PWA. Declining to build them is part of 100%.
+10. **UI overhaul (Media Gallery + tabs + fixed layout)** — every item below has a
+    printed witness:
+    - **Media Gallery sidebar** touches the left screen edge, collapses to a 64 px
+      icon strip, resizes by dragging its right edge, scrolls its content.
+      Two root folders: "Uploaded Audio" and "Recorded Audio". Settings icon opens
+      a dialog to add/remove roots and set local storage paths. Folders and files
+      are renameable (dblclick name or settings). Deleting removes the node.
+    - **Click-to-view transcription**: clicking an audio file in the gallery opens
+      its existing transcription in a tab instantly (GET /studio/takes/<id>/transcript/).
+      If the take has no transcript yet, uploading the file starts transcription
+      and opens a tab when complete. No file is ever transcribed twice.
+    - **Multiple transcription tabs**: each recording/upload gets its own tab.
+      Tabs can be closed; the active tab's content (segments, language, duration,
+      translation state) is isolated. View mode (subtitle/timestamp/compact),
+      timestamp toggle, speaker filter, copy and SRT export apply per tab.
+    - **Single mic toggle**: Start/Stop replaced by one button (mic icon + label),
+      disabled while any pipeline stage is running.
+    - **Fixed transcription window**: main area is `position: fixed` to the
+      viewport, scrollable, resizable from the left edge via the Media Gallery
+      width handle. Browser zoom changes only text size — all layout positions
+      are fixed; no content shifts on zoom.
+    - **Upload panel removed**: uploads live only in the Media Gallery. Multiple
+      files can be uploaded and transcribed at the same time; each gets its own
+      tab when done.
+
+Not in scope, by the owner's instruction, with receipts (§5.3): Save as a separate
+control (replaced by tabs), workspace manager (replaced by Media Gallery), PWA.
+Declining to build them is part of 100%.

@@ -159,3 +159,18 @@ def transcript_body(job, fmt, rows=None):
     if fmt == "txt":
         return plain_text(rows), "txt"
     return None, None
+
+
+def transcript_body_for_take(take, fmt, rows=None):
+    """
+    Same as transcript_body but accepts a Take directly (for the Media Gallery
+    direct-transcript endpoint that doesn't go through a Job).
+    """
+    rows = whisper_rows(take) if rows is None else rows
+    if fmt == "srt":
+        return subtitles(rows, "srt"), "srt"
+    if fmt == "vtt":
+        return subtitles(rows, "vtt"), "vtt"
+    if fmt == "txt":
+        return plain_text(rows), "txt"
+    return None, None

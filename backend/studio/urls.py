@@ -48,6 +48,10 @@ urlpatterns = [
     path("studio/translate/", views.translate_take_view, name="translate_take"),
     path("studio/translate/<uuid:take_id>/", views.get_translation_view, name="get_translation"),
 
+    # Media Gallery (session auth) — UI overhaul
+    path("studio/takes/", views.take_list, name="take_list"),
+    path("studio/takes/<uuid:take_id>/transcript/", views.take_transcript, name="take_transcript"),
+
     # API key management (session auth, account page)
     path("account/keys/", views.api_key_list, name="api_key_list"),
     path("account/keys/generate/", views.api_key_generate, name="api_key_generate"),
