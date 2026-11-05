@@ -51,6 +51,11 @@ urlpatterns = [
     # Media Gallery (session auth) — UI overhaul
     path("studio/takes/", views.take_list, name="take_list"),
     path("studio/takes/<uuid:take_id>/transcript/", views.take_transcript, name="take_transcript"),
+    path("studio/takes/<uuid:take_id>/script/", views.take_script_edit, name="take_script_edit"),
+    path("studio/takes/<uuid:take_id>/script/list/", views.take_script_edits, name="take_script_edits"),
+
+    # Voice cloning (session auth, Phase 7)
+    path("studio/voice-clone/", views.voice_clone, name="voice_clone"),
 
     # API key management (session auth, account page)
     path("account/keys/", views.api_key_list, name="api_key_list"),

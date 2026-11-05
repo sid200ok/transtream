@@ -250,6 +250,10 @@ class Segment(models.Model):
     # {"word","start_ms","end_ms","confidence"} or null.
     word_json = models.JSONField(null=True, blank=True)
 
+    # Phase 4: Speaker diarization ID (e.g., "SPEAKER_00", "SPEAKER_01").
+    # Null for VAD segments; populated for Whisper segments after diarization.
+    speaker_id = models.CharField(max_length=32, blank=True, default="", db_index=True)
+
     created_at = models.DateTimeField(default=timezone.now, editable=False)
 
     class Meta:
@@ -295,6 +299,34 @@ class Translation(models.Model):
     def __str__(self):
         preview = (self.text[:40] + "…") if len(self.text) > 40 else self.text
         return f"Translation {self.source_language}->{self.target_language} for {self.take.id.hex[:8]}: {preview!r}"
+
+
+class ScriptEdit(models.Model):
+    """
+    User override of a single transcript segment's text and display language.
+    One row per (take, segment_index). The edited_text replaces the stored
+    whisper text when rendering the post-recording script panel; display_lang
+    selects which variant the voice-clone playback reads (original | translated | both).
+    """
+    take = models.ForeignKey(Take, on_delete=models.CASCADE, related_name="script_edits")
+    segment_index = models.PositiveIntegerField()
+    original_text = models.TextField(blank=True, default="")
+    edited_text = models.TextField(blank=True, default="")
+    display_language = models.CharField(max_length=16, blank=True, default="original")
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["take", "segment_index"], name="uniq_script_edit_per_segment"),
+        ]
+        indexes = [
+            models.Index(fields=["take", "segment_index"], name="script_edit_take_idx"),
+        ]
+
+    def __str__(self):
+        preview = (self.edited_text[:40] + "…") if len(self.edited_text) > 40 else self.edited_text
+        return f"ScriptEdit take={self.take.id.hex[:8]} seg={self.segment_index} {preview!r}"
 
 
 class ApiKey(models.Model):

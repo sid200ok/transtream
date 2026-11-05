@@ -92,6 +92,7 @@ def transcript_payload(job, rows=None):
                 "end_ms": s.end_ms,
                 "duration_ms": s.duration_ms,
                 "text": s.text,
+                "speaker_id": s.speaker_id or "",
             }
             for s in rows
         ],
@@ -118,27 +119,30 @@ def subtitles(rows, fmt):
 
     Cue numbering is 1-based and sequential for SRT. VTT cues may be
     unnumbered; we emit none, which is valid and keeps the diff between
-    the two formats minimal.
+    the two formats minimal. Speaker IDs (from Phase 4 diarization) are
+    rendered as cue labels when present.
     """
     lines = []
     if fmt == "vtt":
         lines.append("WEBVTT")
         lines.append("")
     for i, s in enumerate(rows, start=1):
+        label = f" ({s.speaker_id})" if s.speaker_id else ""
         if fmt == "srt":
             lines.append(str(i))
             lines.append(f"{ms_to_srt(s.start_ms)} --> {ms_to_srt(s.end_ms)}")
         else:
             lines.append(f"{ms_to_hms(s.start_ms)} --> {ms_to_hms(s.end_ms)}")
-        lines.append(s.text or "")
+        lines.append(f"{s.text or ''}{label}")
         lines.append("")
     return "\n".join(lines)
 
 
-def plain_text(rows):
+def plain_text(rows, show_speaker=False):
     """Human-readable transcript, one segment per line with a time prefix."""
     return "\n".join(
-        f"[{ms_to_hms(s.start_ms)} -> {ms_to_hms(s.end_ms)}] {s.text or ''}"
+        f"[{ms_to_hms(s.start_ms)} -> {ms_to_hms(s.end_ms)}]"
+        f"{f' <{s.speaker_id}>' if show_speaker and s.speaker_id else ''} {s.text or ''}"
         for s in rows
     ) + "\n"
 
@@ -157,7 +161,7 @@ def transcript_body(job, fmt, rows=None):
     if fmt == "vtt":
         return subtitles(rows, "vtt"), "vtt"
     if fmt == "txt":
-        return plain_text(rows), "txt"
+        return plain_text(rows, show_speaker=True), "txt"
     return None, None
 
 
@@ -172,5 +176,5 @@ def transcript_body_for_take(take, fmt, rows=None):
     if fmt == "vtt":
         return subtitles(rows, "vtt"), "vtt"
     if fmt == "txt":
-        return plain_text(rows), "txt"
+        return plain_text(rows, show_speaker=True), "txt"
     return None, None

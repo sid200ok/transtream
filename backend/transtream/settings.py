@@ -147,6 +147,7 @@ MEDIA_ROOT = REPO_ROOT / "media"
 
 # ─── TranStream Studio Storage ─────────────────────────────────────────────
 RECORDINGS_DIR = MEDIA_ROOT / "recordings"
+RECORDER_DIR = MEDIA_ROOT / "recorder"
 
 STUDIO_MAX_TAKE_BYTES = 512 * 1024 * 1024
 # Was a bare literal, which made the service read at consumers.py:603

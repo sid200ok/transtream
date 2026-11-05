@@ -41,7 +41,7 @@ from django.utils import timezone
 from django.views.decorators.http import require_GET, require_POST
 
 from studio import serializers
-from studio.models import ApiKey, Job, JobState, Segment, SegmentSource, Take, TakeKind
+from studio.models import ApiKey, Job, JobState, Segment, SegmentSource, Take, TakeKind, ScriptEdit
 from studio.upload_service import UploadValidationError, handle_upload
 from studio.translation_service import TranslationError, translate_take
 
@@ -451,6 +451,142 @@ def take_transcript(request, take_id):
         content_type="text/plain; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+# ─── Script overrides (Phase 6) ────────────────────────────────────────────
+
+@login_required
+@require_POST
+def take_script_edit(request, take_id):
+    """
+    POST /studio/takes/<uuid>/script/  {"segment_index": int, "edited_text": str, "display_lang": str}
+
+    Upserts a ScriptEdit row for (take, segment_index). Returns the persisted
+    row so the client can reflect it back.
+    """
+    try:
+        tid = uuid.UUID(str(take_id))
+    except (ValueError, AttributeError, TypeError):
+        return JsonResponse({"error": "Invalid take_id."}, status=400)
+
+    from django.shortcuts import get_object_or_404
+    take = get_object_or_404(Take, id=tid, user=request.user)
+
+    try:
+        body = json.loads(request.body) if request.body else {}
+    except (json.JSONDecodeError, ValueError):
+        body = {}
+
+    segment_index = body.get("segment_index")
+    edited_text = body.get("edited_text", "")
+    display_lang = body.get("display_lang", "original")
+
+    if segment_index is None:
+        return JsonResponse({"error": "segment_index is required."}, status=400)
+
+    try:
+        segment_index = int(segment_index)
+    except (ValueError, TypeError):
+        return JsonResponse({"error": "segment_index must be an integer."}, status=400)
+
+    edit, created = ScriptEdit.objects.update_or_create(
+        take=take,
+        segment_index=segment_index,
+        defaults={
+            "edited_text": edited_text or "",
+            "display_language": display_lang or "original",
+        },
+    )
+    logger.info(
+        "Script edit %s for take=%s seg=%s user=%s",
+        "created" if created else "updated",
+        take.id.hex[:8], segment_index, request.user.username,
+    )
+    return JsonResponse({
+        "segment_index": edit.segment_index,
+        "original_text": edit.original_text,
+        "edited_text": edit.edited_text,
+        "display_language": edit.display_language,
+        "created_at": edit.created_at.isoformat(),
+        "updated_at": edit.updated_at.isoformat(),
+    })
+
+
+@login_required
+@require_GET
+def take_script_edits(request, take_id):
+    """
+    GET /studio/takes/<uuid>/script/ -> list of all script edits for a take.
+    """
+    try:
+        tid = uuid.UUID(str(take_id))
+    except (ValueError, AttributeError, TypeError):
+        return JsonResponse({"error": "Invalid take_id."}, status=400)
+
+    from django.shortcuts import get_object_or_404
+    take = get_object_or_404(Take, id=tid, user=request.user)
+
+    edits = ScriptEdit.objects.filter(take=take).order_by("segment_index")
+    return JsonResponse({
+        "take_id": str(take.id),
+        "edits": [
+            {
+                "segment_index": e.segment_index,
+                "original_text": e.original_text,
+                "edited_text": e.edited_text,
+                "display_language": e.display_language,
+                "updated_at": e.updated_at.isoformat(),
+            }
+            for e in edits
+        ],
+    })
+
+
+# ─── Voice cloning (Phase 7) ──────────────────────────────────────────────
+
+@login_required
+@require_POST
+def voice_clone(request):
+    """
+    POST /studio/voice-clone/  {"take_id": str, "speaker_id": str, "text": str, "target_language": str}
+
+    Placeholder endpoint. Returns a 202 with an audio_url field once the
+    NVIDIA Riva / NeMo voice-cloning integration is wired. Until then it
+    returns a structured 501 so the frontend can degrade gracefully.
+    """
+    try:
+        body = json.loads(request.body) if request.body else {}
+    except (json.JSONDecodeError, ValueError):
+        body = {}
+
+    take_id = body.get("take_id")
+    speaker_id = body.get("speaker_id")
+    text = body.get("text", "")
+    target_language = body.get("target_language", "en")
+
+    if not take_id:
+        return JsonResponse({"error": "take_id is required."}, status=400)
+    if not speaker_id:
+        return JsonResponse({"error": "speaker_id is required."}, status=400)
+    if not text:
+        return JsonResponse({"error": "text is required."}, status=400)
+
+    from django.shortcuts import get_object_or_404
+    try:
+        take = get_object_or_404(Take, id=take_id, user=request.user)
+    except (ValueError, AttributeError, TypeError):
+        return JsonResponse({"error": "Invalid take_id."}, status=400)
+
+    logger.warning(
+        "Voice clone requested for take=%s speaker=%s lang=%s by %s — "
+        "Riva/NIM integration not yet configured (returns 501).",
+        take.id.hex[:8], speaker_id, target_language, request.user.username,
+    )
+    return JsonResponse({
+        "error": "Voice cloning is not yet enabled. Set NVIDIA_API_KEY and "
+                 "configure the Riva/NIM client to enable zero-shot TTS.",
+        "code": "voice_clone_not_configured",
+    }, status=501)
 
 
 # ─── API key management (Phase 8, account page) ──────────────────────────

@@ -425,6 +425,22 @@ document.addEventListener('alpine:init', () => {
     liveActive: false,
     activeTab: 'transcribe',
 
+    // ── Phase 3: Real-time Metrics Dashboard ──
+    metrics: {
+      language: '',
+      wpm: 0,
+      latencyMs: 0,
+      speakerCount: 0,
+      speakerNames: [],
+      _segmentTimings: [],
+      _speakerNameMap: {},
+    },
+
+    // ── Phase 5: live inline translation ──
+    liveTranslationTarget: 'en',
+    liveTranslationText: '',
+    showTranslatedOnly: false,
+
     // ── Phase 9/10: mic translation + TTS ──
     micTranslationTarget: 'en',
     micTranslationLoading: false,
@@ -433,6 +449,11 @@ document.addEventListener('alpine:init', () => {
     micTranslationSource: '',
     ttsPlaying: false,
     micTranslationExpanded: false,
+
+    // ── Phase 6: Post-Recording (script overrides, voice cloning) ──
+    voiceCloneSpeaker: '',
+    voiceCloneTargetLang: 'en',
+    voiceCloneLoading: false,
 
     // ── Advanced transcription display state ──
     transcriptView: 'subtitle',   // 'subtitle' | 'timestamp' | 'compact'
@@ -505,6 +526,8 @@ document.addEventListener('alpine:init', () => {
       this.languageDetected = ''; this.languageProbability = 0; this.transcriptSegments = [];
       this.liveTranscriptText = ''; this.liveSegmentCount = 0; this.liveLanguage = '';
       this.liveActive = true;
+      // Reset metrics dashboard
+      this.metrics = { language: '', wpm: 0, latencyMs: 0, speakerCount: 0, speakerNames: [], _segmentTimings: [], _speakerNameMap: {} };
       this.activeTab = 'transcribe';
       this._micSpeakers = null;
 
@@ -609,6 +632,17 @@ document.addEventListener('alpine:init', () => {
       this._cleanupStream();
     },
 
+    // ═══════════
+    // ── Phase 5: update live translation target mid-recording ──
+    updateTranslationTarget() {
+      if (this._ws && this._ws.readyState === WebSocket.OPEN) {
+        this._ws.send(JSON.stringify({
+          type: 'translation_target_change',
+          target_language: this.liveTranslationTarget,
+        }));
+      }
+    },
+
     // ══════════════════════════════════════════════════════════════════════════
     // WebSocket
     // ══════════════════════════════════════════════════════════════════════════
@@ -696,9 +730,22 @@ document.addEventListener('alpine:init', () => {
         // ── Phase 5.5: live rolling preview ──
         case 'live_transcript_update':
           if (!this.recording) break;
+          const prevText = this.liveTranscriptText;
           this.liveTranscriptText = msg.text || '';
           this.liveSegmentCount = msg.segment_count || 0;
           this.liveLanguage = msg.language ? String(msg.language).toUpperCase() : '';
+
+          // Update metrics dashboard
+          this._updateMetrics(msg);
+          break;
+
+        // ── Phase 5: live translation update ──
+        case 'live_translation_update':
+          this.liveTranslationText = msg.translated || '';
+          break;
+
+        case 'translation_target_ack':
+          // Server acknowledged the target change; translations will follow
           break;
 
         // ── Phase 3 ──
@@ -709,6 +756,14 @@ document.addEventListener('alpine:init', () => {
 
         case 'normalized':
           this.normalizing = false; this.normalized = msg; this.normalizeMessage = '';
+          // Phase 6: wire finalized audio URL into the active mic tab.
+          if (msg.output_url && msg.output_file) {
+            const tab = this.tabs.find(t => t.source === 'mic' && t.takeId === this.takeId);
+            if (tab) {
+              tab.audioUrl = msg.output_url;
+              tab.audioFilename = msg.output_file;
+            }
+          }
           break;
 
         // ── Phase 4 ──
@@ -738,6 +793,18 @@ document.addEventListener('alpine:init', () => {
           this.languageProbability = msg.language_probability || 0;
           if (Array.isArray(msg.segments) && msg.segments.length > 0) {
             this.transcriptSegments = msg.segments;
+            // Update metrics with authoritative data
+            this.metrics.language = msg.language ? String(msg.language).toUpperCase() : '';
+            const speakers = new Set();
+            msg.segments.forEach(s => { if (s.speaker_id) speakers.add(s.speaker_id); });
+            this.metrics.speakerCount = speakers.size;
+            if (speakers.size > 0) this.metrics.speakerNames = Array.from(speakers);
+          }
+          // Phase 6: enable post-recording mode for the active mic tab.
+          const tab = this.tabs.find(t => t.source === 'mic' && t.takeId === this.takeId);
+          if (tab) {
+            tab.postRecording = true;
+            tab.segments = this.transcriptSegments; // sync authoritative segments
           }
           this.transcribeMessage = '';
           break;
@@ -781,6 +848,68 @@ document.addEventListener('alpine:init', () => {
           this.ttsPlaying = false;
           break;
       }
+    },
+
+    // ── Phase 3: Metrics Dashboard ──
+    _updateMetrics(msg) {
+      const m = this.metrics;
+      const now = performance.now();
+
+      // Detected language from live update
+      if (msg.language) m.language = String(msg.language).toUpperCase();
+
+      // WPM: count words in new text since last update, divide by segment duration
+      if (msg.text && msg.segment_count) {
+        const words = msg.text.trim().split(/\s+/).filter(Boolean).length;
+        const segMs = msg.segment_duration_ms || 0;
+        if (segMs > 0 && words > 0) {
+          const wpm = (words / segMs) * 60000;
+          m._segmentTimings.push({ wpm, ts: now });
+          // Rolling average of last 5 segments
+          const recent = m._segmentTimings.slice(-5);
+          m.wpm = Math.round(recent.reduce((a, b) => a + b.wpm, 0) / recent.length);
+        }
+      }
+
+      // Latency: time from segment start to now
+      if (msg.latency_ms !== undefined) m.latencyMs = msg.latency_ms;
+
+      // Speaker diarization + name extraction
+      if (msg.speakers) {
+        m.speakerCount = msg.speakers.length || 0;
+        if (Array.isArray(msg.speaker_names)) {
+          m.speakerNames = msg.speaker_names;
+        }
+      } else {
+        m.speakerCount = this._extractSpeakersFromText(msg.text || '').length;
+        m.speakerNames = this._extractSpeakerNames(msg.text || '');
+      }
+    },
+
+    // Extract speaker count from naive speaker-change detection in text
+    _extractSpeakersFromText(text) {
+      const speakers = new Set();
+      const matches = text.match(/SPEAKER_\d+/g);
+      if (matches) matches.forEach(s => speakers.add(s));
+      return speakers.size;
+    },
+
+    // Extract speaker identity names from 'Hi, I am X' style utterances
+    _extractSpeakerNames(text) {
+      const names = [];
+      const patterns = [
+        /(?:hi|hello|hey)[, ]+i (?:am|'m)[, ]+([a-zA-Z]+)/gi,
+        /my name is[, ]+([a-zA-Z]+)/gi,
+        /this is[, ]+([a-zA-Z]+)/gi,
+      ];
+      patterns.forEach(p => {
+        let match;
+        while ((match = p.exec(text)) !== null) {
+          const name = match[1].charAt(0).toUpperCase() + match[1].slice(1).toLowerCase();
+          if (!names.includes(name)) names.push(name);
+        }
+      });
+      return names;
     },
 
     _handleTtsAudio(arrayBuffer) {
@@ -835,6 +964,10 @@ document.addEventListener('alpine:init', () => {
         translationSource: this.micTranslationSource,
         translationLoading: false,
         translationError: '',
+        // Phase 6: post-recording fields
+        postRecording: false,
+        audioUrl: '',
+        audioFilename: '',
       };
       this.tabs.push(tab);
       this.activeTabId = tab.id;
@@ -1183,6 +1316,75 @@ document.addEventListener('alpine:init', () => {
       if (this._ttsAudioContext) {
         try { this._ttsAudioContext.close(); } catch (e) { /* ignore */ }
         this._ttsAudioContext = null;
+      }
+    },
+
+    // Phase 6: Post-Recording - Script Overrides & Voice Cloning
+    async saveScriptEdit(segmentIndex) {
+      const tab = this.activeTab;
+      if (!tab) return;
+
+      const seg = tab.segments.find(s => s.index === segmentIndex);
+      if (!seg) return;
+
+      // Ensure editedText and displayLang exist on the segment
+      if (seg.editedText === undefined) seg.editedText = seg.text || '';
+      if (seg.displayLang === undefined) seg.displayLang = 'original';
+
+      // Persist to backend (Phase 6 endpoint - will be implemented)
+      try {
+        await this._apiPost('/studio/takes/' + tab.takeId + '/script/', {
+          segment_index: segmentIndex,
+          edited_text: seg.editedText,
+          display_lang: seg.displayLang,
+        });
+      } catch (err) {
+        console.warn('Script edit save failed (offline mode):', err);
+        // Continue with local-only edit; backend endpoint will be added in Phase 6b
+      }
+    },
+
+    async playVoiceClone() {
+      const tab = this.activeTab;
+      if (!tab || !this.voiceCloneSpeaker || this.voiceCloneLoading) return;
+
+      this.voiceCloneLoading = true;
+      try {
+        // Phase 7: voice cloning endpoint - placeholder for now
+        // Will call /studio/voice-clone/ with speaker_id, text, target_lang
+        const text = tab.segments
+          .filter(s => s.speaker_id === this.voiceCloneSpeaker)
+          .map(s => s.text || '')
+          .join(' ')
+          .trim();
+
+        if (!text) {
+          this.error = 'No text found for speaker ' + this.voiceCloneSpeaker;
+          return;
+        }
+
+        const resp = await this._apiPost('/studio/voice-clone/', {
+          take_id: tab.takeId,
+          speaker_id: this.voiceCloneSpeaker,
+          text: text,
+          target_language: this.voiceCloneTargetLang,
+        });
+
+        if (!resp.ok) {
+          const d = await resp.json().catch(() => ({}));
+          throw new Error(d.error || 'Voice clone failed (HTTP ' + resp.status + ')');
+        }
+        const d = await resp.json();
+
+        // Play the returned audio URL
+        if (d.audio_url) {
+          const audio = new Audio(d.audio_url);
+          audio.play();
+        }
+      } catch (err) {
+        this.error = 'Voice cloning failed: ' + this._errMessage(err);
+      } finally {
+        this.voiceCloneLoading = false;
       }
     },
 

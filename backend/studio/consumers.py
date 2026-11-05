@@ -54,12 +54,13 @@ from studio.audio_service import (
     normalize_audio,
     normalized_output_path,
 )
+from studio.diarization_service import diarize_vad_segments, map_whisper_to_speakers
 from studio.transcription_service import (
     TranscriptionError,
     join_segments,
     transcribe_audio,
 )
-from studio.translation_service import TranslationError, translate_take
+from studio.translation_service import TranslationError, translate_take, translate_text
 from studio.vad_service import VADError, extract_speech_segments
 from studio.tts_service import (
     TTSError,
@@ -351,6 +352,8 @@ class AudioConsumer(AsyncWebsocketConsumer):
             await self.handle_stop(payload)
         elif control_type == "tts_request":
             await self.handle_tts_request(payload)
+        elif control_type == "translation_target_change":
+            await self.handle_translation_target_change(payload)
         else:
             await self._safe_send({
                 "type": "error",
@@ -365,7 +368,7 @@ class AudioConsumer(AsyncWebsocketConsumer):
 
         mime = payload.get("mime") or "audio/webm"
         self.writer = SessionWriter(
-            directory=settings.RECORDINGS_DIR, prefix="TS_REC_RAW", mime=mime,
+            directory=settings.RECORDER_DIR, prefix="TS_REC_RAW", mime=mime,
         )
         await self.writer.open()
 
@@ -496,6 +499,30 @@ class AudioConsumer(AsyncWebsocketConsumer):
         # Trigger translation + TTS
         await self._trigger_translation_tts(wav_path, src_lang, segments)
 
+    async def handle_translation_target_change(self, payload):
+        """
+        Mid-recording live translation target change (Phase 5).
+
+        Client sends {"type": "translation_target_change", "target_language": "es"}
+        while recording. We store the new target so subsequent live preview
+        chunks get translated on-the-fly and emitted as live_translation_update
+        frames. Non-fatal: any error degrades to "no live translation".
+        """
+        target = (payload.get("target_language") or "").strip().lower()
+        if not target:
+            await self._safe_send({
+                "type": "error",
+                "message": "translation_target_change requires target_language.",
+            })
+            return
+
+        self._translation_target = target
+        await self._safe_send({
+            "type": "translation_target_ack",
+            "target_language": target,
+            "message": f"Live translation target set to {target}.",
+        })
+
     # ── post-stop pipeline (PROVEN f589bb2 chain + 6a-wire persistence) ─
 
     async def _run_post_processing(self, raw_path: Path):
@@ -554,12 +581,19 @@ class AudioConsumer(AsyncWebsocketConsumer):
         try:
             segments = await sync_to_async(extract_speech_segments, thread_sensitive=True)(wav_path)
             total_speech_ms = sum(s["duration_ms"] for s in segments)
+            # Phase 4: diarize VAD segments into speaker turns
+            try:
+                self._diarization_turns = diarize_vad_segments(segments)
+            except Exception as exc:
+                logger.warning("Diarization failed for %s: %s", wav_path.name, exc)
+                self._diarization_turns = []
             await self._safe_send({
                 "type": "vad_complete",
                 "input_file": wav_path.name,
                 "segment_count": len(segments),
                 "total_speech_ms": total_speech_ms,
                 "segments": segments,
+                "speaker_turns": self._diarization_turns,
             })
             # ── 6a-wire: persist acoustic timeline (idempotent, non-fatal) ──
             if self._take is not None:
@@ -605,12 +639,17 @@ class AudioConsumer(AsyncWebsocketConsumer):
                 language=take_language,
                 initial_prompt=take_prompt,
             )
+            # Phase 4: map Whisper segments to speaker turns by temporal overlap
+            tagged_segments = map_whisper_to_speakers(
+                result["segments"],
+                getattr(self, "_diarization_turns", [])
+            )
             await self._safe_send({
                 "type": "transcribing_complete",
                 "input_file": wav_path.name,
                 "language": result["language"],
                 "language_probability": result["language_probability"],
-                "segments": result["segments"],
+                "segments": tagged_segments,
             })
             # ── 6a-wire: persist linguistic timeline + language, mark DONE ──
             if self._take is not None:
@@ -627,7 +666,7 @@ class AudioConsumer(AsyncWebsocketConsumer):
                 and self._translation_target
                 and self._translation_target != result["language"]):
                 await self._trigger_translation_tts(
-                    wav_path, result["language"], result["segments"]
+                    wav_path, result["language"], tagged_segments
                 )
         except TranscriptionError as exc:
             logger.warning("Transcription failed for %s: %s", wav_path.name, exc)
@@ -882,6 +921,26 @@ class AudioConsumer(AsyncWebsocketConsumer):
                     "language": result["language"],
                     "language_probability": round(result["language_probability"], 3),
                 })
+                # ── Phase 5: live translation to target language ──
+                # Translate the live preview text on-the-fly when a target
+                # language is set and differs from the detected source. Best
+                # effort: any failure degrades to "no live translation".
+                if (self._translation_target
+                    and self._translation_target != result["language"]):
+                    try:
+                        translated = await sync_to_async(
+                            translate_text, thread_sensitive=False
+                        )(text, result["language"], self._translation_target)
+                        if translated and gen == self._live_gen:
+                            await self._safe_send({
+                                "type": "live_translation_update",
+                                "original": text,
+                                "translated": translated,
+                                "source_lang": result["language"],
+                                "target_lang": self._translation_target,
+                            })
+                    except TranslationError as exc:
+                        logger.debug("Live translation skipped (gen=%s): %s", gen, exc)
 
         except Exception as exc:            # noqa: BLE001 - deliberate catch-all
             # Preview is strictly best-effort. Log at debug so a noisy

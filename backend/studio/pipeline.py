@@ -59,6 +59,7 @@ from studio.audio_service import (
     normalize_audio,
     normalized_output_path,
 )
+from studio.diarization_service import diarize_vad_segments, map_whisper_to_speakers
 from studio.models import Job, JobState, Take
 from studio.transcription_service import TranscriptionError, transcribe_audio
 from studio.vad_service import VADError, extract_speech_segments
@@ -111,7 +112,12 @@ def process_take(take: Take, worker_id: str = "pipeline") -> bool:
       2 Segment    : extract_speech_segments (Silero VAD, sync);
                      persistence.save_vad_segments writes VAD rows and advances
                      the Job to TRANSCRIBING/60%.
-      3 Transcribe : transcribe_audio(beam=5) (Faster-Whisper, NumPy decode);
+      3 Diarize    : diarize_vad_segments groups VAD speech into speaker turns
+                     (SPEAKER_00 / SPEAKER_01); no DB write — turns are used
+                     to tag Whisper segments in stage 4.
+      4 Transcribe : transcribe_audio(beam=5) with word_timestamps (Faster-Whisper,
+                     NumPy decode); map_whisper_to_speakers tags each segment
+                     with a speaker_id by temporal overlap with turns;
                      persistence.save_whisper_transcript writes Whisper rows,
                      sets Take.language, marks Job DONE/100%.
 
@@ -209,7 +215,22 @@ def process_take(take: Take, worker_id: str = "pipeline") -> bool:
         persistence.mark_job_failed(take, "vad", f"Unexpected: {exc}")
         return False
 
-    # ── Stage 3: Transcribe (Faster-Whisper, NumPy path, beam=5) ───────
+    # ── Stage 3: Diarize (simple silence-gap clustering) ────────────────
+    try:
+        diarization_turns = diarize_vad_segments(vad_segments)
+        logger.info(
+            "process_take [%s] stage 3 OK - Diarization -> %d turn(s)",
+            take_id, len(diarization_turns),
+        )
+    except Exception as exc:
+        # Diarization is best-effort: failure does not block transcription.
+        logger.warning(
+            "process_take [%s] stage 3 WARNING (diarization): %s",
+            take_id, exc,
+        )
+        diarization_turns = []
+
+    # ── Stage 4: Transcribe (Faster-Whisper, NumPy path, beam=5) ───────
     try:
         # Per-take overrides: language_hint pins Whisper's LID, initial_prompt
         # biases the decoder vocabulary. Empty strings fall back to settings,
@@ -221,14 +242,16 @@ def process_take(take: Take, worker_id: str = "pipeline") -> bool:
             language=take_language,
             initial_prompt=take_prompt,
         )
+        # Phase 4: map Whisper segments to speaker turns by temporal overlap.
+        tagged_segments = map_whisper_to_speakers(result["segments"], diarization_turns)
         n_wsp = persistence.save_whisper_transcript(
             take,
             result["language"],
             result["language_probability"],
-            result["segments"],
+            tagged_segments,
         )
         logger.info(
-            "process_take [%s] stage 3 OK - Whisper -> %d segment(s), "
+            "process_take [%s] stage 4 OK - Whisper -> %d segment(s), "
             "lang=%s (%.2f)",
             take_id, n_wsp, result["language"], result["language_probability"],
         )

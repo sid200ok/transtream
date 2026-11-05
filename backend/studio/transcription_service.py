@@ -202,6 +202,7 @@ def transcribe_audio(wav_path: Path, beam_size: int = 5, language: str | None = 
             beam_size=max(1, int(beam_size)),
             vad_filter=True,
             vad_parameters=dict(min_silence_duration_ms=500),
+            word_timestamps=True,             # Phase 4: enable word-level timestamps
         )
 
         result_segments = []
@@ -209,6 +210,18 @@ def transcribe_audio(wav_path: Path, beam_size: int = 5, language: str | None = 
             text = (seg.text or "").strip()
             if not text:
                 continue
+            # Capture word-level timestamps if available (Phase 4).
+            word_json = None
+            if hasattr(seg, "words") and seg.words:
+                word_json = [
+                    {
+                        "word": w.word,
+                        "start_ms": int(round(float(w.start) * 1000)),
+                        "end_ms": int(round(float(w.end) * 1000)),
+                        "confidence": float(w.probability) if w.probability is not None else None,
+                    }
+                    for w in seg.words
+                ]
             result_segments.append({
                 "index": idx,
                 "start_seconds": round(float(seg.start), 3),
@@ -217,6 +230,7 @@ def transcribe_audio(wav_path: Path, beam_size: int = 5, language: str | None = 
                 "end_ms": int(round(float(seg.end) * 1000)),
                 "duration_ms": int(round((float(seg.end) - float(seg.start)) * 1000)),
                 "text": text,
+                "word_json": word_json,
             })
     except TranscriptionError:
         raise

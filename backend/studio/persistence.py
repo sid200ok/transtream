@@ -187,7 +187,7 @@ def save_whisper_transcript(take, language, language_probability, segments):
     Store the Whisper linguistic timeline + the identified language on the
     Take, then mark the job DONE at 100%. `segments` is the list of dicts
     transcription_service returns:
-      [{"index","start_ms","end_ms","duration_ms","text","confidence"?}, ...]
+      [{"index","start_ms","end_ms","duration_ms","text","confidence"?,"speaker_id"?,"word_json"?}, ...]
     Delete-then-insert for source="whisper". Returns rows written.
     """
     rows = [
@@ -200,6 +200,7 @@ def save_whisper_transcript(take, language, language_probability, segments):
             duration_ms=int(s.get("duration_ms", 0)),
             text=(s.get("text") or "").strip(),
             confidence=s.get("confidence"),
+            speaker_id=(s.get("speaker_id") or "").strip(),
             word_json=s.get("word_json"),
         )
         for i, s in enumerate(segments or [])
@@ -296,9 +297,8 @@ def get_take_by_id(take_id):
 def get_whisper_segments(take):
     """
     Fetch all Whisper segments for a take, ordered by index.
-    Returns list of dicts: [{index, start_ms, end_ms, duration_ms, text}, ...]
+    Returns list of dicts: [{index, start_ms, end_ms, duration_ms, text, speaker_id}, ...]
     """
-    from django.conf import settings as _s
     qs = Segment.objects.filter(take=take, source=SegmentSource.WHISPER).order_by("index")
     return [
         {
@@ -307,6 +307,7 @@ def get_whisper_segments(take):
             "end_ms": s.end_ms,
             "duration_ms": s.duration_ms,
             "text": s.text or "",
+            "speaker_id": s.speaker_id or "",
         }
         for s in qs
     ]
