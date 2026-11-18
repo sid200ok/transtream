@@ -44,6 +44,7 @@ from studio import serializers
 from studio.models import ApiKey, Job, JobState, Segment, SegmentSource, Take, TakeKind, ScriptEdit
 from studio.upload_service import UploadValidationError, handle_upload
 from studio.translation_service import TranslationError, translate_take
+from studio.voice_cloning_service import VoiceCloneError, synthesize_with_cloned_voice, voice_clone_status
 
 from studio import persistence
 
@@ -542,7 +543,7 @@ def take_script_edits(request, take_id):
     })
 
 
-# ─── Voice cloning (Phase 7) ──────────────────────────────────────────────
+# ─── Voice cloning (Phase 7 / Phase 10) ──────────────────────────────────
 
 @login_required
 @require_POST
@@ -550,9 +551,12 @@ def voice_clone(request):
     """
     POST /studio/voice-clone/  {"take_id": str, "speaker_id": str, "text": str, "target_language": str}
 
-    Placeholder endpoint. Returns a 202 with an audio_url field once the
-    NVIDIA Riva / NeMo voice-cloning integration is wired. Until then it
-    returns a structured 501 so the frontend can degrade gracefully.
+    Synthesizes `text` in a cloned voice derived from the take's reference
+    audio, using NVIDIA Riva/NIM zero-shot TTS. Falls back to Piper TTS if
+    NVIDIA is unavailable.
+
+    Returns 200 {"audio_url": "/media/...", "speaker_id": "...", "voice_source": "nvidia"|"piper"}
+    or 400/404/500 on error.
     """
     try:
         body = json.loads(request.body) if request.body else {}
@@ -577,16 +581,104 @@ def voice_clone(request):
     except (ValueError, AttributeError, TypeError):
         return JsonResponse({"error": "Invalid take_id."}, status=400)
 
-    logger.warning(
-        "Voice clone requested for take=%s speaker=%s lang=%s by %s — "
-        "Riva/NIM integration not yet configured (returns 501).",
-        take.id.hex[:8], speaker_id, target_language, request.user.username,
-    )
+    # Resolve reference audio: prefer normalized (cleaner for cloning), fall back to raw.
+    reference_audio = None
+    if take.normalized_relpath:
+        reference_audio = take.normalized_file
+    elif take.raw_relpath:
+        reference_audio = take.raw_file
+
+    if not reference_audio or not reference_audio.exists():
+        logger.warning(
+            "Voice clone requested for take=%s speaker=%s by %s — no reference audio on disk.",
+            take.id.hex[:8], speaker_id, request.user.username,
+        )
+        return JsonResponse({
+            "error": "No reference audio available for this take. Record or upload audio first.",
+            "code": "no_reference_audio",
+        }, status=409)
+
+    # Prefer NVIDIA Riva/NIM if enabled and configured.
+    nvidia_enabled = getattr(__import__("django.conf", fromlist=["settings"]).settings, "NVIDIA_VOICE_CLONING_ENABLED", False)
+    nvidia_api_key = getattr(__import__("django.conf", fromlist=["settings"]).settings, "NVIDIA_API_KEY", None)
+
+    audio_bytes = None
+    voice_source = "piper"  # fallback
+
+    if nvidia_enabled and nvidia_api_key:
+        try:
+            audio_bytes = synthesize_with_cloned_voice(
+                text=text,
+                reference_audio_path=reference_audio,
+                speaker_id=speaker_id,
+                target_lang=target_language,
+            )
+            voice_source = "nvidia"
+            logger.info(
+                "Voice clone synthesized via NVIDIA Riva/NIM for take=%s speaker=%s lang=%s "
+                "-> %d bytes",
+                take.id.hex[:8], speaker_id, target_language, len(audio_bytes),
+            )
+        except VoiceCloneError as exc:
+            logger.warning(
+                "NVIDIA voice clone failed for take=%s speaker=%s: %s — falling back to Piper.",
+                take.id.hex[:8], speaker_id, exc,
+            )
+            audio_bytes = None
+            voice_source = "piper"
+
+    if audio_bytes is None:
+        # Fall back to Piper TTS (single voice, no cloning).
+        try:
+            from studio.tts_service import synthesize_tts
+            audio_bytes = synthesize_tts(text=text, language_code=target_language)
+            voice_source = "piper"
+            logger.info(
+                "Voice clone synthesized via Piper fallback for take=%s speaker=%s -> %d bytes",
+                take.id.hex[:8], speaker_id, len(audio_bytes),
+            )
+        except Exception as exc:
+            logger.exception("Piper TTS fallback failed for take=%s speaker=%s: %s",
+                             take.id.hex[:8], speaker_id, exc)
+            return JsonResponse({
+                "error": "Voice synthesis unavailable: NVIDIA and Piper both failed.",
+                "code": "voice_synthesis_failed",
+            }, status=500)
+
+    # Persist synthesized audio to media/recorder/clones/ and return URL.
+    from django.conf import settings as _s
+    import hashlib
+    from django.core.files.storage import default_storage
+
+    clone_dir = _s.MEDIA_ROOT / "recorder" / "clones"
+    clone_dir.mkdir(parents=True, exist_ok=True)
+
+    digest = hashlib.sha256(f"{take.id}:{speaker_id}:{target_language}:{text[:64]}".encode()).hexdigest()[:16]
+    clone_filename = f"clone_{speaker_id}_{digest}.wav"
+    clone_path = clone_dir / clone_filename
+
+    with open(clone_path, "wb") as f:
+        f.write(audio_bytes)
+
+    audio_url = f"{_s.MEDIA_URL}recorder/clones/{clone_filename}"
+
     return JsonResponse({
-        "error": "Voice cloning is not yet enabled. Set NVIDIA_API_KEY and "
-                 "configure the Riva/NIM client to enable zero-shot TTS.",
-        "code": "voice_clone_not_configured",
-    }, status=501)
+        "audio_url": audio_url,
+        "speaker_id": speaker_id,
+        "voice_source": voice_source,
+        "take_id": str(take.id),
+        "target_language": target_language,
+        "size_bytes": len(audio_bytes),
+    })
+
+
+@login_required
+@require_GET
+def voice_clone_status_view(request):
+    """
+    GET /studio/voice-clone/status/ -> voice cloning service status.
+    """
+    return JsonResponse(voice_clone_status())
 
 
 # ─── API key management (Phase 8, account page) ──────────────────────────

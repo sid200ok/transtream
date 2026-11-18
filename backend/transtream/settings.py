@@ -260,6 +260,15 @@ NVIDIA_MODEL = os.getenv("NVIDIA_MODEL", "nvidia/nemotron-3-ultra-550b-a55b")
 NVIDIA_MAX_PARALLEL = int(os.getenv("NVIDIA_MAX_PARALLEL", "14"))
 NVIDIA_RPM = int(os.getenv("NVIDIA_RPM", "30"))
 
+# ─── NVIDIA Riva/NIM Voice Cloning (Phase 10) ──────────────────────────────
+# Zero-shot voice cloning via NVIDIA Riva/NIM TTS endpoints.
+# Requires NVIDIA_API_KEY (shared with Nemotron translation).
+NVIDIA_RIVA_API_BASE = os.getenv("NVIDIA_RIVA_API_BASE", "https://integrate.api.nvidia.com/v1")
+NVIDIA_VOICE_CLONE_MODEL = os.getenv("NVIDIA_VOICE_CLONE_MODEL", "nvidia/tts")
+NVIDIA_VOICE_CLONE_MAX_PARALLEL = int(os.getenv("NVIDIA_VOICE_CLONE_MAX_PARALLEL", "4"))
+NVIDIA_VOICE_CLONE_RPM = int(os.getenv("NVIDIA_VOICE_CLONE_RPM", "10"))
+NVIDIA_VOICE_CLONING_ENABLED = os.getenv("NVIDIA_VOICE_CLONING_ENABLED", "0").lower() in {"1", "true", "yes", "on"}
+
 # Voice map: language code -> Piper voice name (without .onnx extension).
 # Example: "en_US-lessac-medium", "hi_IN-aryan-medium", "es_ES-mls_10265-medium"
 # A "default" key is used as fallback for unmapped languages.

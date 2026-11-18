@@ -441,6 +441,10 @@ document.addEventListener('alpine:init', () => {
     liveTranslationText: '',
     showTranslatedOnly: false,
 
+    // ── Step G: per-take language + initial_prompt (threaded into WebSocket start payload) ──
+    liveLanguageHint: '',
+    liveInitialPrompt: '',
+
     // ── Phase 9/10: mic translation + TTS ──
     micTranslationTarget: 'en',
     micTranslationLoading: false,
@@ -600,6 +604,8 @@ document.addEventListener('alpine:init', () => {
         client_ts: Date.now(),
         session: this.sessionId,
         translation_target: this.micTranslationTarget || '',
+        language: this.liveLanguageHint || '',
+        initial_prompt: this.liveInitialPrompt || '',
       }));
 
       this._recorder.start(100);
@@ -805,6 +811,8 @@ document.addEventListener('alpine:init', () => {
           if (tab) {
             tab.postRecording = true;
             tab.segments = this.transcriptSegments; // sync authoritative segments
+            tab.voiceCloningAvailable = true;
+            tab.speakerList = this._computeSpeakerList(this.transcriptSegments);
           }
           this.transcribeMessage = '';
           break;
@@ -949,12 +957,13 @@ document.addEventListener('alpine:init', () => {
         this.takeId = takeId;
         return;
       }
+      const segments = [...this.transcriptSegments];
       const tab = {
         id: 'tab-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
         title: filename,
         source: 'mic',
         takeId: takeId,
-        segments: [...this.transcriptSegments],
+        segments: segments,
         language: this.languageDetected || '',
         languageProbability: this.languageProbability,
         durationMs: durationMs || 0,
@@ -968,9 +977,27 @@ document.addEventListener('alpine:init', () => {
         postRecording: false,
         audioUrl: '',
         audioFilename: '',
+        // Voice cloning: available when postRecording is true and we have segments
+        voiceCloningAvailable: false,
+        speakerList: this._computeSpeakerList(segments),
       };
       this.tabs.push(tab);
       this.activeTabId = tab.id;
+    },
+
+    _computeSpeakerList(segments) {
+      const set = new Set();
+      for (const s of segments || []) {
+        set.add(this._getSpeakerLabel(s, segments));
+      }
+      return Array.from(set).sort();
+    },
+
+    _getSpeakerLabel(seg, segments) {
+      if (seg.speaker_id) return seg.speaker_id;
+      // Fallback: infer from gap-based logic (same as _speakerLabels)
+      const labels = this._speakerLabels(segments);
+      return labels[seg.index] || 'Speaker 1';
     },
 
     async openExistingTab(takeId, filename) {
@@ -990,12 +1017,13 @@ document.addEventListener('alpine:init', () => {
         if (!resp.ok) throw new Error('HTTP ' + resp.status);
         const d = await resp.json();
 
+        const segments = Array.isArray(d.segments) ? d.segments : [];
         const tab = {
           id: 'tab-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
           title: filename,
           source: 'upload',
           takeId: takeId,
-          segments: Array.isArray(d.segments) ? d.segments : [],
+          segments: segments,
           language: d.language || '',
           languageProbability: d.language_probability || 0,
           durationMs: d.duration_ms || 0,
@@ -1005,6 +1033,9 @@ document.addEventListener('alpine:init', () => {
           translationSource: d.language || '',
           translationLoading: false,
           translationError: '',
+          // Voice cloning: available for completed uploads with segments
+          voiceCloningAvailable: segments.length > 0,
+          speakerList: this._computeSpeakerList(segments),
         };
         this.tabs.push(tab);
         this.activeTabId = tab.id;
@@ -1042,6 +1073,8 @@ document.addEventListener('alpine:init', () => {
       this.micTranslationTarget = tab.translationTarget || 'en';
       this.micTranslationText = tab.translationText || '';
       this.micTranslationSource = tab.translationSource || '';
+      // Update speaker list for voice cloning dropdown (in case segments changed)
+      tab.speakerList = this._computeSpeakerList(tab.segments);
     },
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -1193,12 +1226,13 @@ document.addEventListener('alpine:init', () => {
         u.durationMs = d.duration_ms || 0;
 
         // Open an upload tab when transcription completes.
+        const segments = u.segments || [];
         const tab = {
           id: 'tab-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
           title: u.name,
           source: 'upload',
           takeId: u.takeId,
-          segments: u.segments,
+          segments: segments,
           language: u.language,
           languageProbability: u.languageProbability,
           durationMs: u.durationMs,
@@ -1208,6 +1242,11 @@ document.addEventListener('alpine:init', () => {
           translationSource: u.translationSource,
           translationLoading: false,
           translationError: '',
+          // Post-recording mode: transcription complete
+          postRecording: true,
+          // Voice cloning: available for completed uploads with segments
+          voiceCloningAvailable: segments.length > 0,
+          speakerList: this._computeSpeakerList(segments),
         };
         this.tabs.push(tab);
         this.activeTabId = tab.id;
@@ -1350,10 +1389,9 @@ document.addEventListener('alpine:init', () => {
 
       this.voiceCloneLoading = true;
       try {
-        // Phase 7: voice cloning endpoint - placeholder for now
-        // Will call /studio/voice-clone/ with speaker_id, text, target_lang
+        // Collect text for the selected speaker (match by displayed label)
         const text = tab.segments
-          .filter(s => s.speaker_id === this.voiceCloneSpeaker)
+          .filter(s => this._getSpeakerLabel(s, tab.segments) === this.voiceCloneSpeaker)
           .map(s => s.text || '')
           .join(' ')
           .trim();
@@ -1363,9 +1401,14 @@ document.addEventListener('alpine:init', () => {
           return;
         }
 
+        // Use the actual speaker_id if available for backend, otherwise fallback to label
+        // Find a segment with this speaker to get the real speaker_id
+        const speakerSegment = tab.segments.find(s => this._getSpeakerLabel(s, tab.segments) === this.voiceCloneSpeaker);
+        const speakerId = (speakerSegment && speakerSegment.speaker_id) ? speakerSegment.speaker_id : this.voiceCloneSpeaker;
+
         const resp = await this._apiPost('/studio/voice-clone/', {
           take_id: tab.takeId,
-          speaker_id: this.voiceCloneSpeaker,
+          speaker_id: speakerId,
           text: text,
           target_language: this.voiceCloneTargetLang,
         });

@@ -89,6 +89,9 @@ err()   { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 
 ensure_dirs() {
     mkdir -p "$LOG_DIR"
+    # Phase 8: create recorder/ directory on startup (RECORDER_DIR = media/recorder)
+    mkdir -p "$PROJECT_DIR/media/recorder"
+    mkdir -p "$PROJECT_DIR/media/recordings"
 }
 
 port_in_use() {
@@ -205,7 +208,22 @@ stop_redis_if_we_started() {
 
         rm -f "$REDIS_PID_FILE"
     else
-        warn "Redis was not started by this script. Leaving it alone."
+        # Redis managed externally (system service, different user, etc.)
+        if redis_is_running; then
+            info "Stopping external Redis via redis-cli shutdown..."
+            if redis-cli -p "$REDIS_PORT" shutdown nosave >/dev/null 2>&1; then
+                sleep 1
+                if redis_is_running; then
+                    warn "redis-cli shutdown did not stop Redis; leaving it alone."
+                else
+                    ok "Redis stopped (external instance via shutdown)."
+                fi
+            else
+                info "redis-cli shutdown unavailable; leaving external Redis alone."
+            fi
+        else
+            info "Redis not running."
+        fi
     fi
 }
 

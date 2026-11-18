@@ -54,8 +54,9 @@ urlpatterns = [
     path("studio/takes/<uuid:take_id>/script/", views.take_script_edit, name="take_script_edit"),
     path("studio/takes/<uuid:take_id>/script/list/", views.take_script_edits, name="take_script_edits"),
 
-    # Voice cloning (session auth, Phase 7)
+    # Voice cloning (session auth, Phase 7 / Phase 10)
     path("studio/voice-clone/", views.voice_clone, name="voice_clone"),
+    path("studio/voice-clone/status/", views.voice_clone_status_view, name="voice_clone_status"),
 
     # API key management (session auth, account page)
     path("account/keys/", views.api_key_list, name="api_key_list"),

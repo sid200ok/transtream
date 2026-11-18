@@ -340,37 +340,76 @@
 
         <!-- Right: Actions -->
         <div class="flex items-center gap-2">
-          <!-- Target Language Dropdown (NEW - Live Translation) -->
+          <!-- Target Language Dropdown + Language Hint + Initial Prompt (NEW - Live Translation) -->
           <template x-if="recording">
-            <div class="flex items-center gap-2">
-              <label class="text-xs text-slate-500">Translate to:</label>
-              <select
-                x-model="liveTranslationTarget"
-                @change="updateTranslationTarget()"
-                class="rounded-lg border border-white/10 bg-slate-900 px-2 py-1.5 text-xs text-white outline-none focus:border-cyan-400"
-              >
-                <option value="en">English (en)</option>
-                <option value="es">Spanish (es)</option>
-                <option value="fr">French (fr)</option>
-                <option value="de">German (de)</option>
-                <option value="zh">Chinese (zh)</option>
-                <option value="ja">Japanese (ja)</option>
-                <option value="ko">Korean (ko)</option>
-                <option value="hi">Hindi (hi)</option>
-                <option value="ar">Arabic (ar)</option>
-                <option value="pt">Portuguese (pt)</option>
-                <option value="ru">Russian (ru)</option>
-                <option value="it">Italian (it)</option>
-                <option value="nl">Dutch (nl)</option>
-                <option value="pl">Polish (pl)</option>
-                <option value="tr">Turkish (tr)</option>
-                <option value="vi">Vietnamese (vi)</option>
-              </select>
-              <!-- Live Translation Mode Toggle -->
-              <label class="flex items-center gap-1.5 cursor-pointer ml-2">
-                <input type="checkbox" x-model="showTranslatedOnly" class="rounded border-slate-600 text-cyan-500 focus:ring-cyan-500">
-                <span class="text-xs text-slate-300">Show translated only</span>
-              </label>
+            <div class="flex flex-col items-start gap-2">
+              <div class="flex items-center gap-2">
+                <label class="text-xs text-slate-500">Translate to:</label>
+                <select
+                  x-model="liveTranslationTarget"
+                  @change="updateTranslationTarget()"
+                  class="rounded-lg border border-white/10 bg-slate-900 px-2 py-1.5 text-xs text-white outline-none focus:border-cyan-400"
+                >
+                  <option value="en">English (en)</option>
+                  <option value="es">Spanish (es)</option>
+                  <option value="fr">French (fr)</option>
+                  <option value="de">German (de)</option>
+                  <option value="zh">Chinese (zh)</option>
+                  <option value="ja">Japanese (ja)</option>
+                  <option value="ko">Korean (ko)</option>
+                  <option value="hi">Hindi (hi)</option>
+                  <option value="ar">Arabic (ar)</option>
+                  <option value="pt">Portuguese (pt)</option>
+                  <option value="ru">Russian (ru)</option>
+                  <option value="it">Italian (it)</option>
+                  <option value="nl">Dutch (nl)</option>
+                  <option value="pl">Polish (pl)</option>
+                  <option value="tr">Turkish (tr)</option>
+                  <option value="vi">Vietnamese (vi)</option>
+                </select>
+                <!-- Live Translation Mode Toggle -->
+                <label class="flex items-center gap-1.5 cursor-pointer ml-2">
+                  <input type="checkbox" x-model="showTranslatedOnly" class="rounded border-slate-600 text-cyan-500 focus:ring-cyan-500">
+                  <span class="text-xs text-slate-300">Show translated only</span>
+                </label>
+              </div>
+              <!-- Language Hint (Whisper language pin) -->
+              <div class="flex items-center gap-2 ml-4">
+                <label class="text-xs text-slate-500">Language hint:</label>
+                <select
+                  x-model="liveLanguageHint"
+                  class="rounded-lg border border-white/10 bg-slate-900 px-2 py-1.5 text-xs text-white outline-none focus:border-cyan-400 w-40"
+                >
+                  <option value="">Auto-detect</option>
+                  <option value="en">English (en)</option>
+                  <option value="hi">Hindi (hi)</option>
+                  <option value="es">Spanish (es)</option>
+                  <option value="fr">French (fr)</option>
+                  <option value="de">German (de)</option>
+                  <option value="zh">Chinese (zh)</option>
+                  <option value="ja">Japanese (ja)</option>
+                  <option value="ko">Korean (ko)</option>
+                  <option value="ar">Arabic (ar)</option>
+                  <option value="pt">Portuguese (pt)</option>
+                  <option value="ru">Russian (ru)</option>
+                  <option value="it">Italian (it)</option>
+                  <option value="nl">Dutch (nl)</option>
+                  <option value="pl">Polish (pl)</option>
+                  <option value="tr">Turkish (tr)</option>
+                  <option value="vi">Vietnamese (vi)</option>
+                </select>
+                <span class="text-[10px] text-slate-500">(ISO 639-1, pins Whisper detection)</span>
+              </div>
+              <!-- Initial Prompt (vocabulary boost) -->
+              <div class="flex items-start gap-2 ml-4">
+                <label class="text-xs text-slate-500 mt-1">Initial prompt:</label>
+                <textarea
+                  x-model="liveInitialPrompt"
+                  rows="2"
+                  class="flex-1 min-w-[300px] max-w-[400px] rounded-lg border border-white/10 bg-slate-900 px-2 py-1.5 text-xs text-white outline-none focus:border-cyan-400 resize-none"
+                  placeholder="Vocabulary boost (e.g. Siddhant, Kamailio, FFmpeg, VAD, WebSocket…) — per-take, not global"
+                ></textarea>
+              </div>
             </div>
           </template>
 
