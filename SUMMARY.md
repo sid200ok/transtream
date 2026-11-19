@@ -10,16 +10,11 @@
   - `_run_live_preview` (lines 908-913): Same null guard
 
 ### 2. Chat-Window Style UI Redesign (Section 11.5)
-- **Chat-window message input area** added to `frontend/templates/studio.html` (lines 907-927)
-  - Fixed-position bottom bar (bottom-0, left-0, right-0, p-4, z-40)
-  - Input field with `x-model="newMessage"`, `@keydown.enter="sendMessage"`
-  - Send button with `@click="sendMessage"`
-  - Both disabled when `pipelineBusy() || !recording`
-- **Alpine store `tsStudio`** added (lines 938-962) with:
-  - `newMessage`, `placeholderText` state
-  - `sendMessage()` method
-  - `pipelineBusy()` state check
+- **Full viewport fit**: Main area is `fixed inset-0` — fills complete page area
 - **Scrollable streaming area**: Main area is `position: fixed` with `overflow-y: auto`
+- **Bottom-right mic button**: Record/stop toggle at bottom-right corner
+- **Removed**: message/test input box at bottom — removed per user direction (deemed unnecessary in studio & transcription window)
+- **Removed**: `tsStudio` Alpine store (`sendMessage()`, `pipelineBusy()`) — no longer needed
 
 ### 3. All Transtream CLI Commands Verified
 | Command | Result |
@@ -44,6 +39,7 @@
 - Original 680-line PRD.md restored from HEAD
 - Added section 11.4: Language Hint NoneType Error Fix
 - Added section 11.5: Chat-Window Style UI Redesign
+- Added section 11.6: Layout Bug Fix & Alpine Component Implementation
 
 ### 6. Existing Functionality Preserved
 - Media Gallery sidebar, transcription tabs, translation, TTS, voice cloning all intact
@@ -51,11 +47,20 @@
 - Metrics dashboard (language, WPM, latency, speaker count, speaker names)
 - Script overrides, voice cloning playback UI
 
+### 7. Layout Bug Fix & Alpine Component Implementation (Section 11.6)
+- **Fixed main area tracking**: Changed hardcoded `left: 320px` to `var(--sidebar-width)` — main area now properly follows sidebar width
+- **Sidebar resize implemented**: Added `startResize()` to `mediaGallery` — drag resize handle to update `--sidebar-width` in real-time
+- **Alpine components defined**: Both `mediaGallery` and `studioRecorder` now fully implemented as `Alpine.data()` components with all properties/methods referenced in template
+  - `mediaGallery`: collapse/expand, settings modal, folder tree, upload, rename, resize
+  - `studioRecorder`: Complete state machine, recording toggle, metrics, tabs, translation, voice clone, upload, speaker diarization, transcript view modes
+- **Resize handle**: Positioned on right edge of left sidebar (standard UX)
+- **Verification**: All guard suites GREEN, Django check passes, server responds on port 8006
+
 ## Files Modified
-1. `frontend/templates/studio.html` — Chat-window message input area + Alpine store
-2. `frontend/static/js/studio.js` — Message input functionality
+1. `frontend/templates/studio.html` — Major rewrite: Alpine components (mediaGallery, studioRecorder), fixed main area tracking (`var(--sidebar-width)`), sidebar resize, bottom-right mic button, removed message input box
+2. `frontend/static/js/studio.js` — Cleared of dead message input code
 3. `backend/studio/consumers.py` — Null guards for `language_hint` error fix
-4. `PRD.md` — Restored full content + sections 11.4 and 11.5
+4. `PRD.md` — Restored full content + sections 11.4, 11.5 (updated: removed message input), 11.6
 5. `SUMMARY.md` — Updated with completed work
 
 ## Git Status

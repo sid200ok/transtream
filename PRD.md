@@ -687,9 +687,23 @@ transtream restart→ [OK] Clean stop + start cycle, zero warnings
 
 ### 11.5 Chat-Window Style UI Redesign (Image #4, #8)
 **Problem:** Voice studio launch state persisted as empty centered studio (Image #4) without chat-window layout fitting the complete area with scrollable streaming (Image #8).
-**Fix:** Added chat-window style message input area at the bottom of the main content:
-- Fixed-position bottom bar with text input field and Send button
-- Input disabled when pipeline busy or not recording
-- Alpine store `tsStudio` with `sendMessage()` and `pipelineBusy()` state
-- Input submits on Enter key as well as Send button click
-**Files:** `frontend/templates/studio.html`, `frontend/static/js/studio.js`
+**Fix:** Redesigned studio page as a full-viewport chat-window style layout:
+- Full viewport fit (`fixed inset-0`) — fills complete page area
+- Scrollable streaming area (`overflow-y-auto`) in the main content
+- Bottom-right mic button for record/stop toggle
+- Resizable left sidebar (Media Gallery) with width tracking
+- **Removed:** message/test input box at bottom — deemed unnecessary in studio & transcription window
+- **Removed:** `tsStudio` Alpine store (`sendMessage()`) — no longer needed; `pipelineBusy()` remains on `studioRecorder`
+**Files:** `frontend/templates/studio.html`, `frontend/static/js/studio.js` (cleared of dead code)
+
+### 11.6 Layout Bug Fix & Alpine Component Implementation (Image #5, #7, #8)
+**Problem:** Studio page had a critical layout bug — main area used hardcoded `left: 320px` instead of tracking sidebar width CSS variable (`--sidebar-width`), causing misalignment when sidebar was resized or collapsed. Additionally, `mediaGallery` and `studioRecorder` Alpine components were referenced but never defined, breaking all interactivity (sidebar collapse, recording, tabs, metrics, etc.).
+**Fix:** 
+1. **Main area tracks sidebar width**: Changed `:style="{ left: isCollapsed ? '64px' : '320px' }"` to `:style="{ left: isCollapsed ? '64px' : 'var(--sidebar-width)' }"` — main area now properly follows sidebar width changes.
+2. **Sidebar resize implemented**: Added `startResize()` method to `mediaGallery` component — captures mouse drag on resize handle and updates `--sidebar-width` CSS variable in real-time.
+3. **Alpine components defined**: Implemented both `mediaGallery` and `studioRecorder` as `Alpine.data()` components with all required properties and methods referenced in the template.
+   - `mediaGallery`: `isCollapsed`, `toggleCollapse()`, `init()`, `roots`, `openSettings()`, `showSettings`, `saveSettings()`, `renameItem`, `confirmRename()`, `cancelRename()`, `addRoot()`, `removeRoot()`, `setUploadTarget()`, `createFolder()`, `startResize()`, `renderFolderTree()`, `removeRootFromTree()`, `openExistingTab()`
+   - `studioRecorder`: Complete state machine (`idle`→`recording`→`normalizing`→`vadRunning`→`transcribing`→`postProcessing`), all UI bindings (metrics, tabs, translation, voice clone, upload, speaker diarization, etc.)
+4. **Resize handle positioned correctly**: On right edge of left sidebar (`right-0`), standard UX for left sidebar resize.
+**Files:** `frontend/templates/studio.html` (major update with Alpine component definitions)
+**Verification:** Django `manage.py check` → 0 issues, all guard suites GREEN (layers, pipeline invariants, log append-only)

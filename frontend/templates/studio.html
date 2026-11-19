@@ -252,7 +252,7 @@
   <!-- ─── MAIN AREA: TRANSCRIPTION WINDOW (FIXED, SCROLLABLE) ─── -->
   <main
     class="fixed top-16 right-0 bottom-0 overflow-y-auto bg-slate-950 transition-all duration-300"
-    :style="{ left: isCollapsed ? '64px' : '320px' }"
+    :style="{ left: isCollapsed ? '64px' : 'var(--sidebar-width)' }"
   >
     <!-- Top Bar -->
     <header class="sticky top-0 z-30 h-16 border-b border-white/10 bg-slate-900/80 backdrop-blur-md">
@@ -904,28 +904,6 @@
       <span x-show="!isMobile" x-text="recording ? 'Stop' : 'Record'"></span>
     </button>
 
-  <!-- ─── MESSAGE INPUT AREA (CHAT WINDOW STYLE) ─── -->
-  <div class="fixed bottom-0 left-0 right-0 flex items-center justify-center p-4 bg-slate-900/50 border-t border-white/10 z-40">
-    <div class="flex w-full max-w-2xl">
-      <input
-        type="text"
-        x-model="newMessage"
-        @keydown.enter="sendMessage"
-        class="flex-1 rounded-lg border border-white/10 bg-slate-900 px-4 py-2 text-sm text-white focus:border-cyan-400 focus:ring-cyan-400"
-        :placeholder="placeholderText"
-        :disabled="pipelineBusy() || !recording"
-      >
-      <button
-        type="button"
-        @click="sendMessage"
-        :disabled="pipelineBusy() || !recording || !newMessage.trim()"
-        class="ml-2 rounded-lg border border-white/10 bg-cyan-500/5 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-500 disabled:opacity-50 transition"
-      >
-        Send
-      </button>
-    </div>
-  </div>
-
 </main>
 </div>
 
@@ -935,30 +913,367 @@
 
 <script src="{% static 'js/studio.js' %}"></script>
 
-<!-- Alpine store for chat messaging -->
+<!-- Alpine components: mediaGallery & studioRecorder -->
 <script>
 document.addEventListener('alpine:init', () => {
-  Alpine.store('tsStudio', {
-    newMessage: '',
-    placeholderText: 'Type your message here...',
+  // ─── Media Gallery Sidebar Component ───
+  Alpine.data('mediaGallery', () => ({
+    isCollapsed: false,
+    showSettings: false,
+    renameItem: null,
+    roots: [],
+    mgUploadInput: null,
 
-    sendMessage() {
-      if (this.pipelineBusy() || !this.recording || !this.newMessage.trim()) return;
+    init() {
+      // Load roots from localStorage
+      const stored = localStorage.getItem('ts_media_roots');
+      if (stored) {
+        try {
+          this.roots = JSON.parse(stored);
+        } catch (e) {
+          console.warn('Failed to parse media roots:', e);
+          this.roots = [];
+        }
+      }
+      // Expand first root by default
+      if (this.roots.length > 0 && !this.roots[0].expanded) {
+        this.roots[0].expanded = true;
+      }
+    },
 
-      // Simulate sending message to backend
-      console.log('Sending:', this.newMessage);
+    toggleCollapse() {
+      this.isCollapsed = !this.isCollapsed;
+    },
 
-      // Clear input
-      this.newMessage = '';
+    openSettings() {
+      this.showSettings = true;
+    },
+
+    saveSettings() {
+      localStorage.setItem('ts_media_roots', JSON.stringify(this.roots));
+      this.showSettings = false;
+    },
+
+    addRoot() {
+      this.roots.push({
+        id: crypto.randomUUID(),
+        name: 'New Folder',
+        path: '',
+        expanded: true
+      });
+    },
+
+    removeRoot(root) {
+      this.roots = this.roots.filter(r => r.id !== root.id);
+    },
+
+    setUploadTarget(root) {
+      this.uploadTargetRoot = root;
+      this.$refs.mgUploadInput.click();
+    },
+
+    onMgFileChosen(event) {
+      const files = Array.from(event.target.files);
+      if (!files.length || !this.uploadTargetRoot) return;
+
+      // Simulate upload — in real implementation, would POST to /studio/upload/
+      files.forEach(file => {
+        console.log('Upload:', file.name, 'to', this.uploadTargetRoot.path);
+      });
+      event.target.value = '';
+      this.uploadTargetRoot = null;
+    },
+
+    createFolder(parent) {
+      const newFolder = {
+        id: crypto.randomUUID(),
+        name: 'New Folder',
+        path: '',
+        expanded: true,
+        children: []
+      };
+      if (parent.children) {
+        parent.children.push(newFolder);
+      } else {
+        parent.children = [newFolder];
+      }
+    },
+
+    confirmRename() {
+      if (this.renameItem && this.renameItem.newName.trim()) {
+        this.renameItem.element.name = this.renameItem.newName.trim();
+      }
+      this.renameItem = null;
+    },
+
+    cancelRename() {
+      this.renameItem = null;
+    },
+
+    startResize(event) {
+      event.preventDefault();
+      event.stopPropagation();
+
+      const startX = event.clientX;
+      const rootEl = document.querySelector('[x-data="studioRecorder"]');
+      const startWidth = rootEl ? parseFloat(getComputedStyle(rootEl).getPropertyValue('--sidebar-width')) : 320;
+
+      const onMouseMove = (e) => {
+        const deltaX = e.clientX - startX;
+        const newWidth = Math.max(64, Math.min(600, startWidth + deltaX));
+        if (rootEl) {
+          rootEl.style.setProperty('--sidebar-width', newWidth + 'px');
+        }
+        this.isCollapsed = newWidth <= 64;
+      };
+
+      const onMouseUp = () => {
+        document.removeEventListener('mousemove', onMouseMove);
+        document.removeEventListener('mouseup', onMouseUp);
+        document.body.style.userSelect = '';
+        document.body.style.cursor = '';
+      };
+
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup', onMouseUp);
+      document.body.style.userSelect = 'none';
+      document.body.style.cursor = 'col-resize';
+    },
+
+    renderFolderTree(folder) {
+      if (!folder.children || !folder.children.length) return '';
+      let html = '<div class="space-y-1">';
+      for (const child of folder.children) {
+        html += `
+          <div class="border-l border-white/5 pl-4">
+            <div class="flex items-center gap-2 px-3 py-1.5">
+              <button class="p-1 rounded text-slate-500 hover:text-white" title="New folder" @click.self="createFolder($event)"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 002-2h-6l-2-2H5a2 2 0 00-2 2z"></path></svg></button>
+              <span class="flex-1 text-sm text-slate-100 bg-transparent border-none outline-none truncate">${child.name}</span>
+              <button class="p-1 rounded text-rose-500 hover:text-rose-300" title="Remove" @click.self="removeRootFromTree($event, '${child.id}')"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg></button>
+            </div>
+          </div>
+        `;
+      }
+      html += '</div>';
+      return html;
+    },
+
+    removeRootFromTree(event, childId) {
+      event.stopPropagation();
+      console.log('Remove child:', childId);
+    },
+
+    openExistingTab(takeId, shortId) {
+      console.log('openExistingTab:', takeId, shortId);
+      // Implemented in studioRecorder
+      if (window.studioRecorderInstance) {
+        window.studioRecorderInstance.openExistingTab(takeId, shortId);
+      }
+    }
+  }));
+
+  // ─── Studio Recorder Main Component ───
+  Alpine.data('studioRecorder', () => ({
+    // State
+    state: 'idle', // idle, connecting, recording, normalizing, vadRunning, transcribing, postProcessing
+    recording: false,
+    connecting: false,
+    normalizing: false,
+    vadRunning: false,
+    transcribing: false,
+    languageDetected: '',
+    liveLanguage: '',
+    languageProbability: 0,
+    liveTranscriptText: '',
+    elapsedMs: 0,
+    activeTabId: null,
+    activeTab: null,
+    metrics: {
+      wpm: 0,
+      latencyMs: 0,
+      speakerCount: 0,
+      speakers: [],
+      speakerNames: [],
+      language: 'en'
+    },
+    nativeScript: false,
+    micTranslationExpanded: false,
+    micTranslationTarget: 'en',
+    micTranslationLoading: false,
+    micTranslationError: '',
+    micTranslationText: '',
+    micTranslationSource: '',
+    takeId: null,
+    isMobile: false,
+    upload: {
+      uploading: false,
+      polling: false,
+      progress: 0,
+      pct: 0
+    },
+    nativeScriptMode: false,
+    transcriptView: 'subtitle',
+    showTimestamps: false,
+    activeSpeaker: 'all',
+    liveTranslationTarget: 'en',
+    showTranslatedOnly: false,
+    liveLanguageHint: '',
+    liveInitialPrompt: '',
+    voiceCloneSpeaker: '',
+    voiceCloneTargetLang: 'en',
+    normalized: {
+      sample_rate: 16000,
+      channels: 1,
+      bit_depth: 16,
+      size_bytes: 0
+    },
+    liveTranslationText: '',
+    liveSegmentCount: 0,
+    normalizeMessage: 'Normalizing audio…',
+    vadMessage: 'Detecting speech…',
+    transcribeMessage: 'Transcribing…',
+    error: '',
+    tabs: [],
+
+    // Computed
+    pipelineLabel() {
+      const labels = {
+        idle: 'Idle',
+        connecting: 'Connecting…',
+        recording: 'Recording',
+        normalizing: 'Normalizing',
+        vadRunning: 'Voice Activity Detection',
+        transcribing: 'Transcribing',
+        postProcessing: 'Post-processing…'
+      };
+      return labels[this.state] || 'Idle';
+    },
+
+    fmtTime(ms) {
+      if (!ms) return '00:00:00.0';
+      const d = new Date(ms);
+      const hh = String(d.getUTCHours()).padStart(2, '0');
+      const mm = String(d.getUTCMinutes()).padStart(2, '0');
+      const ss = String(d.getUTCSeconds()).padStart(2, '0');
+      const ms3 = String(d.getUTCMilliseconds()).padStart(3, '0')[0];
+      return `${hh}:${mm}:${ss}.${ms3}`;
+    },
+
+    fmtSegTime(ms) {
+      if (!ms && ms !== 0) return '00:00:00';
+      const s = Math.floor(ms / 1000);
+      const hh = String(Math.floor(s / 3600)).padStart(2, '0');
+      const mm = String(Math.floor((s % 3600) / 60)).padStart(2, '0');
+      const ss = String(s % 60).padStart(2, '0');
+      return `${hh}:${mm}:${ss}`;
+    },
+
+    fmtSampleRate(rate) {
+      return rate >= 1000 ? (rate / 1000).toFixed(1) + 'k' : rate;
+    },
+
+    fmtBytes(bytes) {
+      if (!bytes) return '0 B';
+      const units = ['B', 'KB', 'MB', 'GB'];
+      let i = 0;
+      while (bytes >= 1024 && i < units.length - 1) {
+        bytes /= 1024;
+        i++;
+      }
+      return bytes.toFixed(1) + ' ' + units[i];
     },
 
     pipelineBusy() {
-      // Check if any pipeline activity is happening
-      return ['recording', 'normalizing', 'vadRunning', 'transcribing'].some(state =>
-        Alpine.store('studioRecorder').state === state
-      );
+      return ['recording', 'normalizing', 'vadRunning', 'transcribing', 'postProcessing'].includes(this.state);
+    },
+
+    toggleRecording() {
+      if (this.pipelineBusy()) return;
+      this.recording = !this.recording;
+      this.state = this.recording ? 'recording' : 'idle';
+      console.log('Recording toggled:', this.recording);
+    },
+
+    toggleNativeScript() {
+      this.nativeScript = !this.nativeScript;
+    },
+
+    playVoiceClone() {
+      console.log('Play voice clone');
+    },
+
+    copyTranscript() {
+      console.log('Copy transcript');
+    },
+
+    exportSrt() {
+      console.log('Export SRT');
+    },
+
+    _applyTabToUI(tab) {
+      this.activeTabId = tab.id;
+      this.activeTab = tab;
+      console.log('Applied tab:', tab);
+    },
+
+    closeTab(tabId) {
+      this.tabs = this.tabs.filter(t => t.id !== tabId);
+      if (this.activeTabId === tabId) {
+        this.activeTabId = this.tabs[0]?.id || null;
+        this.activeTab = this.tabs[0] || null;
+      }
+    },
+
+    stopTtsPlayback() {
+      console.log('Stop TTS playback');
+    },
+
+    uploadStatusLabel() {
+      if (this.upload.uploading) return 'Uploading audio…';
+      if (this.upload.polling) return 'Processing…';
+      return 'Idle';
+    },
+
+    translateMic() {
+      this.micTranslationLoading = true;
+      console.log('Translate mic to:', this.micTranslationTarget);
+      setTimeout(() => {
+        this.micTranslationLoading = false;
+        this.micTranslationText = 'Translated text would appear here.';
+        this.micTranslationSource = 'en';
+      }, 1000);
+    },
+
+    getSpeaker(index) {
+      return `SPEAKER_${String(index % 4).padStart(2, '0')}`;
+    },
+
+    speakerColor(speaker) {
+      const colors = [
+        'bg-cyan-500/20 text-cyan-300',
+        'bg-emerald-500/20 text-emerald-300',
+        'bg-amber-500/20 text-amber-300',
+        'bg-rose-500/20 text-rose-300'
+      ];
+      const idx = parseInt(speaker.split('_')[1] || '0') % colors.length;
+      return colors[idx];
+    },
+
+    openExistingTab(takeId, shortId) {
+      this.activeTabId = takeId;
+      this.activeTab = { id: takeId, title: shortId, metrics: {} };
+      console.log('Opened existing tab:', takeId);
+    }
+  }));
+
+  // Expose studioRecorder instance globally for cross-component calls
+  document.addEventListener('alpine:initialized', () => {
+    const el = document.querySelector('[x-data="studioRecorder"]');
+    if (el) {
+      window.studioRecorderInstance = Alpine.$data(el);
     }
   });
+});
 </script>
 
 </body>

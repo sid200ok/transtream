@@ -85,7 +85,7 @@ def create_mic_take(user, source_filename, raw_abs_path, duration_ms, mime="",
         source_filename=source_filename or "",
         raw_relpath=relpath_for(raw_abs_path),
         duration_ms=int(duration_ms or 0),
-        language_hint=language_hint.strip().lower()[:16],
+        language_hint=(language_hint or "").strip().lower()[:16],
         initial_prompt=initial_prompt,
     )
     Job.objects.create(
@@ -112,7 +112,7 @@ def create_upload_take(user, source_filename, raw_abs_path, duration_ms=None,
         source_filename=source_filename or "",
         raw_relpath=relpath_for(raw_abs_path),
         duration_ms=int(duration_ms) if duration_ms is not None else 0,
-        language_hint=language_hint.strip().lower()[:16],
+        language_hint=(language_hint or "").strip().lower()[:16],
         initial_prompt=initial_prompt,
     )
     Job.objects.create(
