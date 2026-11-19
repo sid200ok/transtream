@@ -904,7 +904,29 @@
       <span x-show="!isMobile" x-text="recording ? 'Stop' : 'Record'"></span>
     </button>
 
-  </main>
+  <!-- ─── MESSAGE INPUT AREA (CHAT WINDOW STYLE) ─── -->
+  <div class="fixed bottom-0 left-0 right-0 flex items-center justify-center p-4 bg-slate-900/50 border-t border-white/10 z-40">
+    <div class="flex w-full max-w-2xl">
+      <input
+        type="text"
+        x-model="newMessage"
+        @keydown.enter="sendMessage"
+        class="flex-1 rounded-lg border border-white/10 bg-slate-900 px-4 py-2 text-sm text-white focus:border-cyan-400 focus:ring-cyan-400"
+        :placeholder="placeholderText"
+        :disabled="pipelineBusy() || !recording"
+      >
+      <button
+        type="button"
+        @click="sendMessage"
+        :disabled="pipelineBusy() || !recording || !newMessage.trim()"
+        class="ml-2 rounded-lg border border-white/10 bg-cyan-500/5 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-500 disabled:opacity-50 transition"
+      >
+        Send
+      </button>
+    </div>
+  </div>
+
+</main>
 </div>
 
 
@@ -912,5 +934,32 @@
 <input type="file" id="ts-mg-upload-input" multiple accept="audio/*" x-ref="mgUploadInput" @change="onMgFileChosen" class="hidden">
 
 <script src="{% static 'js/studio.js' %}"></script>
+
+<!-- Alpine store for chat messaging -->
+<script>
+document.addEventListener('alpine:init', () => {
+  Alpine.store('tsStudio', {
+    newMessage: '',
+    placeholderText: 'Type your message here...',
+
+    sendMessage() {
+      if (this.pipelineBusy() || !this.recording || !this.newMessage.trim()) return;
+
+      // Simulate sending message to backend
+      console.log('Sending:', this.newMessage);
+
+      // Clear input
+      this.newMessage = '';
+    },
+
+    pipelineBusy() {
+      // Check if any pipeline activity is happening
+      return ['recording', 'normalizing', 'vadRunning', 'transcribing'].some(state =>
+        Alpine.store('studioRecorder').state === state
+      );
+    }
+  });
+</script>
+
 </body>
 </html>

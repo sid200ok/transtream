@@ -163,7 +163,7 @@ has_systemd_user() {
 }
 
 redis_is_running() {
-    redis-cli -p "$REDIS_PORT" ping >/dev/null 2>&1
+    redis-cli -h localhost -p "$REDIS_PORT" -t 2 ping >/dev/null 2>&1
 }
 
 start_redis_if_needed() {
@@ -211,7 +211,7 @@ stop_redis_if_we_started() {
         # Redis managed externally (system service, different user, etc.)
         if redis_is_running; then
             info "Stopping external Redis via redis-cli shutdown..."
-            if redis-cli -p "$REDIS_PORT" shutdown nosave >/dev/null 2>&1; then
+            if redis-cli -h localhost -p "$REDIS_PORT" -t 2 shutdown nosave >/dev/null 2>&1; then
                 sleep 1
                 if redis_is_running; then
                     warn "redis-cli shutdown did not stop Redis; leaving it alone."
@@ -429,10 +429,22 @@ stop_worker_if_we_started() {
         fi
 
         rm -f "$WORKER_PID_FILE"
+    elif worker_foreign_running; then
+        info "Stopping foreign tsworker (not started by this script)..."
+        pkill -f "manage.py tsworker" >/dev/null 2>&1 || true
+        sleep 2
+        if worker_foreign_running; then
+            info "Force killing foreign tsworker..."
+            pkill -9 -f "manage.py tsworker" >/dev/null 2>&1 || true
+            sleep 1
+        fi
+        if ! worker_foreign_running; then
+            ok "Foreign tsworker stopped"
+        else
+            warn "Could not stop foreign tsworker; leaving it running."
+        fi
     elif ! worker_foreign_running; then
         info "No worker was started by this script."
-    else
-        warn "A tsworker is running that this script did not start. Leaving it alone."
     fi
 }
 
@@ -833,6 +845,24 @@ cmd_status() {
 
 cmd_logs() {
     ensure_dirs
+
+    # `transtream logs worker` is checked FIRST so the operator can always
+    # follow the worker even when the app is also running.
+    if [ "${1:-}" = "worker" ]; then
+        if has_systemd_user && [ -f "$WORKER_UNIT_FILE" ]; then
+            local wunit
+            wunit=$(cat "$WORKER_UNIT_FILE" 2>/dev/null || echo "")
+            if [ -n "$wunit" ] && systemctl --user is-active --quiet "$wunit"; then
+                info "Following systemd journal for worker unit: $wunit"
+                journalctl --user -u "$wunit" -f
+                return 0
+            fi
+        fi
+        touch "$WORKER_OUT_FILE" "$LOG_DIR/worker.log"
+        info "Tailing $WORKER_OUT_FILE and $LOG_DIR/worker.log (Ctrl+C to stop)..."
+        tail -f "$WORKER_OUT_FILE" "$LOG_DIR/worker.log"
+        return 0
+    fi
 
     if has_systemd_user && [ -f "$UNIT_FILE" ]; then
         local unit

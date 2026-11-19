@@ -656,3 +656,25 @@ transtream restart→ [OK] Clean stop + start cycle, zero warnings
 - Auto-run (`enable`/`disable`) works via systemd user units; creates symlinks under `~/.config/systemd/user/default.target.wants/`. Works in this environment — no blocker.
 - Foreign `tsworker` process (PID 355569) is detected but not managed by transtream CLI — by design (never kills what it didn't start).
 - Port scanning: if preferred port 8000 is busy, scans upward until free port found.
+
+## 11. Critical Fixes This Session
+
+### 11.1 Redis CLI Hang in WSL2 (Fixed)
+**Problem:** `redis-cli -p 6379 ping` hangs indefinitely on `127.0.0.1` in WSL2 when Redis isn't responding (connection hangs instead of refusing).
+**Fix:** Changed `redis_is_running()` and `redis-cli shutdown` to use `-h localhost -t 2` (timeout 2s).
+**Files:** `scripts/transtream:165-167`, `scripts/transtream:214`
+
+### 11.2 Voice Cloning End-to-End (Completed)
+- Backend: `voice_cloning_service.py`, `views.py:voice_clone()`, settings knobs, URL routes
+- Frontend: `studio.js` speakerList computation, `playVoiceClone()`, tab integration
+- UI: `studio.html` speaker/target-language dropdowns + Clone button (post-recording only)
+- Rate limiting: Semaphore(4) + Token Bucket(10 RPM)
+- Fallback: Piper TTS (single voice, no cloning)
+- No new pip installs; Rule 12 respected
+
+### 11.3 All Guard Suites Green
+- `guard_layers`: G1-G4 all pass
+- `guard_pipeline_invariants`: 0 violations
+- `guard_log_append_only`: 0 advisories
+- `guard_worker_boots`: OK (exit 0, log grew)
+- `patchkit --selftest`: 16/16 pass

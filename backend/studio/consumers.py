@@ -632,8 +632,12 @@ class AudioConsumer(AsyncWebsocketConsumer):
             # here because recording has already ended (no writes to starve).
             # Per-take language + initial_prompt thread through from the start
             # payload; empty means settings default (unchanged behaviour).
-            take_language = self._take.language_hint.strip() or None
-            take_prompt = self._take.initial_prompt.strip() or None
+            if self._take is not None:
+                take_language = self._take.language_hint.strip() or None
+                take_prompt = self._take.initial_prompt.strip() or None
+            else:
+                take_language = None
+                take_prompt = None
             result = await sync_to_async(transcribe_audio, thread_sensitive=True)(
                 wav_path, 5,
                 language=take_language,
@@ -901,8 +905,12 @@ class AudioConsumer(AsyncWebsocketConsumer):
 
             # 3) inference on the GENERAL thread pool -> write_chunk keeps flowing
             # Per-take language + initial_prompt thread through.
-            take_language = self._take.language_hint.strip() or None
-            take_prompt = self._take.initial_prompt.strip() or None
+            if self._take is not None:
+                take_language = self._take.language_hint.strip() or None
+                take_prompt = self._take.initial_prompt.strip() or None
+            else:
+                take_language = None
+                take_prompt = None
             result = await sync_to_async(transcribe_audio, thread_sensitive=False)(
                 Path(live_wav_path), 1,          # beam_size=1 => lowest latency
                 language=take_language,
