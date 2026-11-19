@@ -16,15 +16,17 @@
 
 <body class="h-full bg-slate-950 text-slate-100 antialiased">
 
-<!-- HEADER NAVIGATION -->
+<!-- HEADER NAVIGATION - FULL VIEWPORT WIDTH -->
 <header class="fixed inset-x-0 top-0 z-50 border-b border-white/10 bg-slate-900/80 backdrop-blur-md">
-    <div class="mx-auto flex h-16 max-w-7xl items-center justify-between gap-4 px-4 sm:px-6 lg:px-8">
+    <div class="flex h-16 items-center justify-between gap-4 px-4">
 
+        <!-- Left: Logo touches left border -->
         <a href="{% url 'studio:studio' %}" class="flex items-center gap-2 text-base font-semibold tracking-tight">
             <span>🎙️</span>
             <span>TranStream</span>
         </a>
 
+        <!-- Center: Navigation -->
         <nav class="flex flex-wrap items-center gap-1 text-sm">
             <a href="{% url 'studio:studio' %}"
                class="rounded-md px-3 py-2 transition {% if page == 'studio' %}bg-slate-800 text-white{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %}">
@@ -47,6 +49,7 @@
             </a>
         </nav>
 
+        <!-- Right: Auth touches right border -->
         <div class="flex items-center gap-3">
             {% if user.is_authenticated %}
             <span class="hidden text-xs text-slate-400 sm:inline">
