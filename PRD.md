@@ -232,7 +232,7 @@ output — commit `b48bd13`.
 Gates are hard: do not start a row until the row above it has a printed witness.
 
 | # | Work | Shape | Gate to start | Gate to finish |
-|---|---|---|---|---|
+|---|---|---|---|---|---|
 | **A** | Forward repair of §4 | 1 commit, prose only | nothing | **DONE — `cd48229`** |
 | **B** | **Browser-verify the native-script toggle** | manual, 30 s | A | **DONE — toggle clickable, ON adds `text-lg leading-relaxed` to segment container, OFF removes it; verified on recording path (no segments) and uploads path (28 segments)** |
 | **C** | Land the patchkit honesty fix (`AXES`, `cases != AXES`, derived return) | 1 patch, 4 edits | B | **DONE — `b48bd13`**; skip simulation prints rc=1 with `15/16` |
@@ -576,9 +576,7 @@ witness in the same session:
 5. **§4's two false pushed claims are repaired forward** — commit `cd48229` exists.
 6. **§5 step C lands with the skip simulation printing rc=1 and `15/16`** — commit `b48bd13`; instrument shown stopping itself on the input class that broke it.
 7. Slice A is live end to end: translation_service.py + nvidia_translation_service.py (NVIDIA Nemotron primary, argostranslate fallback with lazy import), Translation model, translate_take_view/get_translation_view endpoints, WebSocket translation+TTS trigger, frontend Translate button — all wired. Language pack download (~40 MB per pair) requires explicit owner approval per rule 12; NVIDIA primary needs no pack. Pair direction: take-language → target (default `en`), no-op when source == target.
-
 8. **Voice cloning is live end to end:** backend — voice_cloning_service.py (NVIDIA Riva/NIM zero-shot TTS with semaphore 4 + token bucket 10 RPM), views.py voice_clone() endpoint (POST synthesizes cloned audio from take's reference audio, persists to `media/recorder/clones/`, returns audio_url), settings.py NVIDIA_VOICE_CLONE_* knobs, .env.example all 5 voice cloning knobs documented, URL routes; frontend — studio.js voiceClone state + speakerList computation + playVoiceClone() handler wired to `/studio/voice-clone/`, studio.html speaker/target-language dropdowns + Clone button shown on post-recording tabs. Fallback: Piper TTS (single voice, no cloning). Opt-in: `NVIDIA_VOICE_CLONING_ENABLED=1` required. No new pip installs; rule 12 respected.
-
 9. §3's measured facts are in the README, including the three that constrain design:
    the prompt cannot choose the language, the name is vocabulary not capacity, and
    the glossary is per-take not per-deployment.
@@ -678,3 +676,20 @@ transtream restart→ [OK] Clean stop + start cycle, zero warnings
 - `guard_log_append_only`: 0 advisories
 - `guard_worker_boots`: OK (exit 0, log grew)
 - `patchkit --selftest`: 16/16 pass
+
+### 11.4 Language Hint NoneType Error Fix (Image #6)
+**Problem:** `AttributeError: 'NoneType' object has no attribute 'language_hint'` occurred in post-processing paths when user is anonymous or DB unavailable (`self._take` is None).
+**Fix:** Added null guards in two locations in `backend/studio/consumers.py`:
+- `_trigger_transcription` (~line 635): `if self._take is not None:` before accessing `language_hint`
+- `_run_live_preview` (~line 908): Same null guard for live preview path
+**Files:** `backend/studio/consumers.py:635-639`, `backend/studio/consumers.py:908-913`
+**Verification:** All guard suites pass, `manage.py check` → 0 issues
+
+### 11.5 Chat-Window Style UI Redesign (Image #4, #8)
+**Problem:** Voice studio launch state persisted as empty centered studio (Image #4) without chat-window layout fitting the complete area with scrollable streaming (Image #8).
+**Fix:** Added chat-window style message input area at the bottom of the main content:
+- Fixed-position bottom bar with text input field and Send button
+- Input disabled when pipeline busy or not recording
+- Alpine store `tsStudio` with `sendMessage()` and `pipelineBusy()` state
+- Input submits on Enter key as well as Send button click
+**Files:** `frontend/templates/studio.html`, `frontend/static/js/studio.js`
