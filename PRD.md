@@ -29,7 +29,7 @@ burned by their absence:
 | Root | `/home/ML/transtream` (WSL, host `LAPTOP-B4UTDP8Q`) | every prompt |
 | Interpreter | Python 3.14, venv at `./venv` | `VENV_OK: /home/ML/transtream/venv` |
 | Remote | `github.com:S-V-J/transtream`, branch `main` | `git ls-remote` |
-| HEAD | `99870c5`, == `origin/main` + 2 local commits | this turn |
+| HEAD | `a3d8305`, == `origin/main` (log rotation fix pushed) | this turn |
 | Server | Daphne on `127.0.0.1:8001`, port in `logs/transtream.port` | README, CLI |
 | Model | `Systran/faster-whisper-tiny`, CPU, `int8`, HF cache only | `settings.py`, `.env.example:29` |
 | VAD | Silero, `VAD_THRESHOLD=0.5`, `MIN_SILENCE_MS=500`, `SPEECH_PAD_MS=30` | `.env.example:14-16` |
@@ -70,6 +70,7 @@ VAD found 7 regions on 05eb0713 and Whisper merged them into 16 utterances.
 | `b9e51d5` | advanced transcription display with speaker diarization UI | 3 view modes, timestamp toggle, heuristic speakers, filter chips, copy, .srt export |
 | `677b159` | Media Gallery sidebar, transcription tabs, single mic toggle, fixed layout | browser-verified UI overhaul (§5.4) |
 | `99870c5` | Phase 4-6: diarization, live translation target, script overrides, voice clone | diarization_service.py, speaker_id on Segment, ScriptEdit model, voice_clone endpoint (501), RECORDER_DIR |
+| `a3d8305` | **Worker log rotation via systemd journal** | All 4 systemd output directives switched from `append:file` to `journal`; `cmd_logs` prefers `journalctl`; fixes 76 GB `tsworker.out` unbounded growth |
 | *(this session)* | **Voice cloning complete** — NVIDIA Riva/NIM zero-shot TTS + Piper fallback | voice_cloning_service.py, views.py voice_clone (synthesizes cloned audio), settings.py NVIDIA_VOICE_CLONE_* knobs, .env.example, URL routes; authenticated endpoint returns audio_url |
 
 ### 2.3 Instruments built or repaired
@@ -609,6 +610,19 @@ witness in the same session:
     - **Upload panel removed**: uploads live only in the Media Gallery. Multiple
       files can be uploaded and transcribed at the same time; each gets its own
       tab when done.
+
+12. **Worker log rotation via systemd journal** — `scripts/transtream` (commit
+    `a3d8305`) switches all 4 systemd unit output directives from
+    `StandardOutput=append:...` / `StandardError=append:...` to
+    `StandardOutput=journal` / `StandardError=journal`:
+    - Transient worker unit (`start_worker`)
+    - Transient Daphne unit (`start_daphne`)
+    - Persistent Daphne service (`write_persistent_unit`)
+    - Persistent worker service (`write_persistent_worker_unit`)
+    `cmd_logs` refactored to prefer `journalctl`; file tailing only as nohup
+    fallback. **Fixes 76 GB `tsworker.out` unbounded growth.** Verified:
+    `journalctl --user -u transtream-worker-...` and `transtream logs` both
+    stream from journal. No `pip install`, no migration — Rule 12 respected.
 
 Not in scope, by the owner's instruction, with receipts (§5.3): Save as a separate
 control (replaced by tabs), workspace manager (replaced by Media Gallery), PWA.
