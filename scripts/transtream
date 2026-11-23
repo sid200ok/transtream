@@ -326,8 +326,8 @@ start_worker() {
             --setenv=PYTHONUNBUFFERED=1 \
             --setenv=DJANGO_SETTINGS_MODULE=transtream.settings \
             --setenv=TS_WARMUP_MODELS=1 \
-            --property=StandardOutput=append:"$WORKER_OUT_FILE" \
-            --property=StandardError=append:"$WORKER_OUT_FILE" \
+            --property=StandardOutput=journal \
+            --property=StandardError=journal \
             "$VENV_DIR/bin/python" manage.py tsworker --verbose
 
         sleep 3
@@ -476,8 +476,8 @@ WorkingDirectory=$BACKEND_DIR
 ExecStart=$VENV_DIR/bin/daphne -b $APP_HOST -p $port transtream.asgi:application
 Restart=on-failure
 RestartSec=5
-StandardOutput=append:$LOG_DIR/daphne.log
-StandardError=append:$LOG_DIR/daphne-error.log
+StandardOutput=journal
+StandardError=journal
 Environment=PYTHONUNBUFFERED=1
 Environment=DJANGO_SETTINGS_MODULE=transtream.settings
 Environment="DJANGO_CSRF_TRUSTED_ORIGINS=${origins}"
@@ -511,8 +511,8 @@ After=network.target
 Type=simple
 WorkingDirectory=$BACKEND_DIR
 ExecStart=$VENV_DIR/bin/python manage.py tsworker --verbose
-StandardOutput=append:$WORKER_OUT_FILE
-StandardError=append:$WORKER_OUT_FILE
+StandardOutput=journal
+StandardError=journal
 Environment=PYTHONUNBUFFERED=1
 Environment=DJANGO_SETTINGS_MODULE=transtream.settings
 Environment=TS_WARMUP_MODELS=1
@@ -557,8 +557,8 @@ start_daphne() {
             --setenv=PYTHONUNBUFFERED=1 \
             --setenv=DJANGO_SETTINGS_MODULE=transtream.settings \
             --setenv="DJANGO_CSRF_TRUSTED_ORIGINS=${origins}" \
-            --property=StandardOutput=append:"$LOG_DIR/daphne.log" \
-            --property=StandardError=append:"$LOG_DIR/daphne-error.log" \
+            --property=StandardOutput=journal \
+            --property=StandardError=journal \
             "$VENV_DIR/bin/daphne" \
                 -b "$APP_HOST" \
                 -p "$port" \
@@ -846,59 +846,55 @@ cmd_status() {
 cmd_logs() {
     ensure_dirs
 
-    # `transtream logs worker` is checked FIRST so the operator can always
-    # follow the worker even when the app is also running.
-    if [ "${1:-}" = "worker" ]; then
-        if has_systemd_user && [ -f "$WORKER_UNIT_FILE" ]; then
-            local wunit
-            wunit=$(cat "$WORKER_UNIT_FILE" 2>/dev/null || echo "")
-            if [ -n "$wunit" ] && systemctl --user is-active --quiet "$wunit"; then
-                info "Following systemd journal for worker unit: $wunit"
-                journalctl --user -u "$wunit" -f
+    # With systemd user units now using StandardOutput=journal, prefer journalctl.
+    # File tailing is the nohup/setsid fallback path only.
+    if has_systemd_user; then
+        # `transtream logs worker` is checked FIRST so the operator can always
+        # follow the worker even when the app is also running.
+        if [ "${1:-}" = "worker" ]; then
+            if [ -f "$WORKER_UNIT_FILE" ]; then
+                local wunit
+                wunit=$(cat "$WORKER_UNIT_FILE" 2>/dev/null || echo "")
+                if [ -n "$wunit" ] && systemctl --user is-active --quiet "$wunit"; then
+                    info "Following systemd journal for worker unit: $wunit"
+                    journalctl --user -u "$wunit" -f
+                    return 0
+                fi
+            fi
+            if systemctl --user is-active --quiet "$WORKER_SERVICE_NAME" 2>/dev/null; then
+                info "Following systemd journal for worker service: $WORKER_SERVICE_NAME"
+                journalctl --user -u "$WORKER_SERVICE_NAME" -f
                 return 0
             fi
         fi
-        touch "$WORKER_OUT_FILE" "$LOG_DIR/worker.log"
-        info "Tailing $WORKER_OUT_FILE and $LOG_DIR/worker.log (Ctrl+C to stop)..."
-        tail -f "$WORKER_OUT_FILE" "$LOG_DIR/worker.log"
-        return 0
-    fi
 
-    if has_systemd_user && [ -f "$UNIT_FILE" ]; then
-        local unit
-        unit=$(cat "$UNIT_FILE" 2>/dev/null || echo "")
+        # Daphne logs
+        if [ -f "$UNIT_FILE" ]; then
+            local unit
+            unit=$(cat "$UNIT_FILE" 2>/dev/null || echo "")
 
-        if [ -n "$unit" ]; then
-            if systemctl --user is-active --quiet "$unit"; then
-                info "Following systemd journal for unit: $unit"
-                journalctl --user -u "$unit" -f
-            else
-                info "Showing recent systemd journal for inactive unit: $unit"
-                journalctl --user -u "$unit" -n 120 --no-pager
+            if [ -n "$unit" ]; then
+                if systemctl --user is-active --quiet "$unit"; then
+                    info "Following systemd journal for unit: $unit"
+                    journalctl --user -u "$unit" -f
+                else
+                    info "Showing recent systemd journal for inactive unit: $unit"
+                    journalctl --user -u "$unit" -n 120 --no-pager
+                fi
+
+                return 0
             fi
+        fi
 
+        if systemctl --user is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+            info "Following systemd journal for persistent service: $SERVICE_NAME"
+            journalctl --user -u "$SERVICE_NAME" -f
             return 0
         fi
     fi
 
-    if has_systemd_user && systemctl --user is-active --quiet "$SERVICE_NAME"; then
-        info "Following systemd journal for persistent service: $SERVICE_NAME"
-        journalctl --user -u "$SERVICE_NAME" -f
-        return 0
-    fi
-
-    # `transtream logs worker` follows only the worker, so an operator debugging a
-    # stuck upload is not scrolling past Daphne traffic.
+    # Fallback: file-based logging (nohup/setsid mode, no systemd user session)
     if [ "${1:-}" = "worker" ]; then
-        if has_systemd_user && [ -f "$WORKER_UNIT_FILE" ]; then
-            local wunit
-            wunit=$(cat "$WORKER_UNIT_FILE" 2>/dev/null || echo "")
-            if [ -n "$wunit" ] && systemctl --user is-active --quiet "$wunit"; then
-                info "Following systemd journal for worker unit: $wunit"
-                journalctl --user -u "$wunit" -f
-                return 0
-            fi
-        fi
         touch "$WORKER_OUT_FILE" "$LOG_DIR/worker.log"
         info "Tailing $WORKER_OUT_FILE and $LOG_DIR/worker.log (Ctrl+C to stop)..."
         tail -f "$WORKER_OUT_FILE" "$LOG_DIR/worker.log"
