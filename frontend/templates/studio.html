@@ -81,7 +81,7 @@
 </header>
 
 <!-- STUDIO APP - FULL VIEWPORT, NO CONTAINER CONSTRAINTS -->
-<div x-data="studioRecorder" class="fixed inset-0 z-10 h-full bg-slate-950" style="--sidebar-width: 320px;">
+<div x-data="studioRecorder" x-init="init()" class="fixed inset-0 z-10 h-full bg-slate-950" style="--sidebar-width: 320px;">
 
   <!-- ─── LEFT SIDEBAR: MEDIA GALLERY ─── -->
   <aside
@@ -887,7 +887,7 @@
       @mousedown.prevent="startMicDrag"
       :disabled="connecting || normalizing || vadRunning || transcribing"
       :class="[
-        'fixed z-50 flex items-center justify-center gap-2 rounded-full px-5 py-3 text-sm font-semibold transition shadow-xl cursor-move',
+        'fixed z-50 flex items-center justify-center rounded-full p-3 text-sm transition shadow-xl cursor-move',
         recording ? 'bg-rose-600 text-white hover:bg-rose-500' : 'bg-emerald-600 text-white hover:bg-emerald-500',
         (connecting || normalizing || vadRunning || transcribing) ? 'opacity-50 cursor-not-allowed' : '',
         micDragging ? 'cursor-grabbing scale-110' : ''
@@ -903,7 +903,6 @@
           <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"></path>
         </template>
       </svg>
-      <span x-show="!isMobile" x-text="recording ? 'Stop' : 'Record'"></span>
     </button>
 
 </main>
@@ -1151,6 +1150,7 @@ document.addEventListener('alpine:init', () => {
     micDragging: false,
     micPos: { x: window.innerWidth - 80, y: window.innerHeight - 80 },
     micDragOffset: { x: 0, y: 0 },
+    micMoved: false,
 
     // Computed
     pipelineLabel() {
@@ -1208,28 +1208,46 @@ document.addEventListener('alpine:init', () => {
     startMicDrag(event) {
       if (this.pipelineBusy() && !this.recording) return;
       this.micDragging = true;
+      this.micMoved = false;
       const rect = event.target.getBoundingClientRect();
       this.micDragOffset.x = event.clientX - rect.left;
       this.micDragOffset.y = event.clientY - rect.top;
-      document.addEventListener('mousemove', this.onMicDrag);
-      document.addEventListener('mouseup', this.onMicDragEnd);
+      const moveHandler = (e) => this._onMicDrag(e);
+      const upHandler = () => this._onMicDragEnd();
+      this._micMoveHandler = moveHandler;
+      this._micUpHandler = upHandler;
+      document.addEventListener('mousemove', moveHandler);
+      document.addEventListener('mouseup', upHandler);
       document.body.style.userSelect = 'none';
     },
 
-    onMicDrag(event) {
+    _onMicDrag(event) {
       if (!this.micDragging) return;
       const newX = event.clientX - this.micDragOffset.x;
       const newY = event.clientY - this.micDragOffset.y;
       // Constrain to viewport
       this.micPos.x = Math.max(0, Math.min(window.innerWidth - 72, newX));
       this.micPos.y = Math.max(64, Math.min(window.innerHeight - 72, newY)); // Below header
+      this.micMoved = true;
     },
 
-    onMicDragEnd() {
+    _onMicDragEnd() {
       this.micDragging = false;
-      document.removeEventListener('mousemove', this.onMicDrag);
-      document.removeEventListener('mouseup', this.onMicDragEnd);
+      this.micMoved = false;
+      if (this._micMoveHandler) {
+        document.removeEventListener('mousemove', this._micMoveHandler);
+      }
+      if (this._micUpHandler) {
+        document.removeEventListener('mouseup', this._micUpHandler);
+      }
+      this._micMoveHandler = null;
+      this._micUpHandler = null;
       document.body.style.userSelect = '';
+    },
+
+    _repositionMicOnResize() {
+      this.micPos.x = Math.min(this.micPos.x, Math.max(0, window.innerWidth - 72));
+      this.micPos.y = Math.min(this.micPos.y, Math.max(64, window.innerHeight - 72));
     },
 
     // ─── WebSocket & Recording ───
@@ -1381,7 +1399,15 @@ document.addEventListener('alpine:init', () => {
       }
     },
 
-    async toggleRecording() {
+    async init() {
+      window.addEventListener('resize', () => this._repositionMicOnResize());
+    },
+
+    toggleRecording() {
+      if (this.micMoved) {
+        // Just finished a drag — don't toggle recording
+        return;
+      }
       if (this.pipelineBusy() && !this.recording) return;
 
       if (!this.recording) {
