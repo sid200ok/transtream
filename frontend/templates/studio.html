@@ -880,7 +880,9 @@
       </template>
     </div>
 
-    <!-- ─── DRAGGABLE MIC BUTTON ─── -->
+    </main>
+
+    <!-- ─── DRAGGABLE MIC BUTTON (direct child of studio container, not inside main's overflow) ─── -->
     <button
       type="button"
       @click="toggleRecording()"
@@ -905,7 +907,6 @@
       </svg>
     </button>
 
-</main>
 </div>
 
 
