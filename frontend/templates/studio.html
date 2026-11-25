@@ -895,7 +895,7 @@
         micDragging ? 'cursor-grabbing scale-110' : ''
       ]"
       :title="recording ? 'Stop recording (Space) — Drag to move' : 'Start recording (Space) — Drag to move'"
-      :style="{ left: micPos.x + 'px', top: micPos.y + 'px', right: 'auto', bottom: 'auto' }"
+      :style="{ right: micPos.right + 'px', bottom: micPos.bottom + 'px', left: 'auto', top: 'auto' }"
     >
       <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
         <template x-if="recording">
@@ -1149,7 +1149,7 @@ document.addEventListener('alpine:init', () => {
     wsUrl: null,
     sessionId: null,
     micDragging: false,
-    micPos: { x: window.innerWidth - 80, y: window.innerHeight - 80 },
+    micPos: { right: 20, bottom: 20 },
     micDragOffset: { x: 0, y: 0 },
     micMoved: false,
 
@@ -1210,9 +1210,8 @@ document.addEventListener('alpine:init', () => {
       if (this.pipelineBusy() && !this.recording) return;
       this.micDragging = true;
       this.micMoved = false;
-      const rect = event.target.getBoundingClientRect();
-      this.micDragOffset.x = event.clientX - rect.left;
-      this.micDragOffset.y = event.clientY - rect.top;
+      this.micDragOffset.x = event.clientX;
+      this.micDragOffset.y = event.clientY;
       const moveHandler = (e) => this._onMicDrag(e);
       const upHandler = () => this._onMicDragEnd();
       this._micMoveHandler = moveHandler;
@@ -1224,11 +1223,11 @@ document.addEventListener('alpine:init', () => {
 
     _onMicDrag(event) {
       if (!this.micDragging) return;
-      const newX = event.clientX - this.micDragOffset.x;
-      const newY = event.clientY - this.micDragOffset.y;
+      const deltaX = event.clientX - this.micDragOffset.x;
+      const deltaY = event.clientY - this.micDragOffset.y;
       // Constrain to viewport
-      this.micPos.x = Math.max(0, Math.min(window.innerWidth - 72, newX));
-      this.micPos.y = Math.max(64, Math.min(window.innerHeight - 72, newY)); // Below header
+      this.micPos.right = Math.max(10, Math.min(window.innerWidth - 60, this.micPos.right - deltaX));
+      this.micPos.bottom = Math.max(10, Math.min(window.innerHeight - 60, this.micPos.bottom + deltaY));
       this.micMoved = true;
     },
 
@@ -1247,8 +1246,8 @@ document.addEventListener('alpine:init', () => {
     },
 
     _repositionMicOnResize() {
-      this.micPos.x = Math.min(this.micPos.x, Math.max(0, window.innerWidth - 72));
-      this.micPos.y = Math.min(this.micPos.y, Math.max(64, window.innerHeight - 72));
+      this.micPos.right = Math.min(this.micPos.right, window.innerWidth - 60);
+      this.micPos.bottom = Math.min(this.micPos.bottom, window.innerHeight - 60);
     },
 
     // ─── WebSocket & Recording ───
